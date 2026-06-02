@@ -42,6 +42,7 @@ dependencies:
   flutter_naver_map: ^1.4.4
   flutter_background_service: ^5.0.5
   flutter_dotenv: ^6.0.1
+  http: ^1.6.0
 
 dev_dependencies:
   flutter_test:

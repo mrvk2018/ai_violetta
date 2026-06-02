@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_naver_map/flutter_naver_map.dart';
 
 class NaverMapHudWidget extends StatelessWidget {
@@ -6,6 +7,19 @@ class NaverMapHudWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (kIsWeb) {
+      return Positioned.fill(
+        child: Container(
+          color: Colors.black.withValues(alpha: 0.25),
+          alignment: Alignment.center,
+          child: const Text(
+            'Naver Map background (mobile only)',
+            style: TextStyle(color: Colors.white70),
+          ),
+        ),
+      );
+    }
+
     return Positioned.fill(
       child: NaverMap(
         options: const NaverMapViewOptions(

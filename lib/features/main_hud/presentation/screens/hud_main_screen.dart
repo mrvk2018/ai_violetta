@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../../assistant/data/gemini_service.dart';
 import '../../../assistant/domain/assistant_state.dart';
 import '../../../navigation/presentation/widgets/naver_map_hud_widget.dart';
+import '../../../translator/data/papago_scraping_service.dart';
 
 class HudMainScreen extends StatefulWidget {
   const HudMainScreen({super.key});
@@ -14,7 +15,11 @@ class HudMainScreen extends StatefulWidget {
 }
 
 class _HudMainScreenState extends State<HudMainScreen> {
+  static const bool _papagoSmokeTestEnabled =
+      bool.fromEnvironment('PAPAGO_SMOKE_TEST', defaultValue: false);
+
   late final ViolettaGeminiService _geminiService;
+  late final PapagoScrapingService _papagoScrapingService;
   final TextEditingController _textController = TextEditingController();
 
   AssistantState _assistantState = AssistantState.idle;
@@ -24,6 +29,22 @@ class _HudMainScreenState extends State<HudMainScreen> {
   void initState() {
     super.initState();
     _geminiService = ViolettaGeminiService();
+    _papagoScrapingService = PapagoScrapingService();
+    if (_papagoSmokeTestEnabled) {
+      _runPapagoSmokeTest();
+    }
+  }
+
+  Future<void> _runPapagoSmokeTest() async {
+    final String translated = await _papagoScrapingService.translate(
+      text: '안녕하세요',
+      source: 'ko',
+      target: 'ru',
+    );
+    if (!mounted) {
+      return;
+    }
+    debugPrint('[HUD] papago_translation="$translated"');
   }
 
   @override
@@ -46,10 +67,17 @@ class _HudMainScreenState extends State<HudMainScreen> {
     debugPrint('[HUD] user_message="$message"');
 
     try {
+      final Future<String> translatedFuture = _papagoScrapingService.translate(
+        text: message,
+        source: 'ko',
+        target: 'ru',
+      );
       final String answer = await _geminiService.sendMessage(message);
+      final String translated = await translatedFuture;
       if (!mounted) {
         return;
       }
+      debugPrint('[HUD] papago_translation="$translated"');
       debugPrint('[HUD] model_response="$answer"');
       setState(() {
         _dialogText = answer;
