@@ -3,6 +3,9 @@
         android:label="violetta_app"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        <meta-data
+            android:name="com.naver.maps.map.CLIENT_ID"
+            android:value="YOUR_NAVER_CLIENT_ID_IF_NEEDED" />
         <activity
             android:name=".MainActivity"
             android:exported="true"
