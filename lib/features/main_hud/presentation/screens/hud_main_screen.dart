@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:violetta_app/core/presentation/layout/responsive_layout_info.dart';
 import 'package:violetta_app/features/ar_avatar/domain/avatar_state.dart';
 import 'package:violetta_app/features/ar_avatar/presentation/widgets/violetta_3d_view.dart';
+import 'package:violetta_app/features/assistant/data/gemini_service.dart';
 import 'package:violetta_app/features/assistant/domain/assistant_state.dart';
 import 'package:violetta_app/features/navigation/presentation/widgets/naver_map_hud_widget.dart';
 import 'package:violetta_app/features/translator/data/papago_scraping_service.dart';
@@ -30,18 +31,21 @@ class _HudMainScreenState extends State<HudMainScreen> {
   late final CachedTranslatorRepository _translatorRepository;
   late final LocalSttService _localSttService;
   late final LocalTtsService _ttsService;
+  late final ViolettaGeminiService _geminiService;
   final TextEditingController _textController = TextEditingController();
   Timer? _sttWatchdogTimer;
   Timer? _speakingFallbackTimer;
 
   AssistantState _assistantState = AssistantState.idle;
   AvatarAnimationState _currentAvatarState = AvatarAnimationState.idle;
+  bool _isChatMode = false;
   bool _isListening = false;
   String _dialogText = 'Виолетта на связи. Напиши сообщение ниже.';
 
   @override
   void initState() {
     super.initState();
+    _geminiService = ViolettaGeminiService();
     _translatorRepository = CachedTranslatorRepository(PapagoScrapingService());
     _localSttService = LocalSttService();
     _localSttService.init();
@@ -172,22 +176,32 @@ class _HudMainScreenState extends State<HudMainScreen> {
     debugPrint('[HUD] user_message="$message"');
 
     try {
-      final String translated = await _translatorRepository.translate(
-        message,
-        source: 'ko',
-        target: 'ru',
-      );
+      final String replyText;
+      final String ttsLocaleId;
+      if (_isChatMode) {
+        replyText = await _geminiService.sendMessage(message);
+        ttsLocaleId = 'ru-RU';
+      } else {
+        replyText = await _translatorRepository.translate(
+          message,
+          source: 'ru',
+          target: 'ko',
+        );
+        ttsLocaleId = 'ko-KR';
+      }
       if (!mounted) {
         return;
       }
-      debugPrint('[HUD] papago_translation="$translated"');
+      debugPrint(
+        '[HUD] mode=${_isChatMode ? 'chat' : 'translate'} response="$replyText"',
+      );
       setState(() {
-        _dialogText = translated;
+        _dialogText = replyText;
         _assistantState = AssistantState.speaking;
         _currentAvatarState = AvatarAnimationState.speaking;
       });
-      await _ttsService.speak(translated, 'ko-KR');
-      _scheduleSpeakingFallback(translated);
+      await _ttsService.speak(replyText, ttsLocaleId);
+      _scheduleSpeakingFallback(replyText);
     } catch (error) {
       if (!mounted) {
         return;
@@ -600,6 +614,8 @@ class _HudMainScreenState extends State<HudMainScreen> {
           ),
         ),
         const SizedBox(width: 8),
+        _buildInteractionModeToggle(neonCyan: neonCyan, neonPink: neonPink),
+        const SizedBox(width: 8),
         IconButton(
           tooltip: _isListening ? 'Stop voice input' : 'Start voice input',
           icon: const Icon(Icons.mic),
@@ -620,6 +636,53 @@ class _HudMainScreenState extends State<HudMainScreen> {
           child: const Icon(Icons.send_rounded),
         ),
       ],
+    );
+  }
+
+  Widget _buildInteractionModeToggle({
+    required Color neonCyan,
+    required Color neonPink,
+  }) {
+    final IconData icon = _isChatMode ? Icons.psychology : Icons.translate;
+    final String label = _isChatMode ? 'ВИОЛЕТТА ИИ' : 'ПЕРЕВОД';
+    final Color accentColor = _isChatMode ? neonPink : neonCyan;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: () {
+          if (_assistantState == AssistantState.loading) {
+            return;
+          }
+          setState(() {
+            _isChatMode = !_isChatMode;
+          });
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          decoration: BoxDecoration(
+            color: accentColor.withOpacity(0.13),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: accentColor.withOpacity(0.75)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: accentColor, size: 18),
+              const SizedBox(width: 4),
+              Text(
+                label,
+                style: TextStyle(
+                  color: accentColor,
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.3,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
