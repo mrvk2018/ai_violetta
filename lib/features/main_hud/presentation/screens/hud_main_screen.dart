@@ -3,8 +3,10 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:violetta_app/core/presentation/layout/responsive_layout_info.dart';
 import 'package:violetta_app/features/ar_avatar/domain/avatar_state.dart';
 import 'package:violetta_app/features/ar_avatar/presentation/widgets/violetta_3d_view.dart';
@@ -14,6 +16,7 @@ import 'package:violetta_app/features/main_hud/domain/models/spatial_marker.dart
 import 'package:violetta_app/features/navigation/presentation/widgets/naver_map_hud_widget.dart';
 import 'package:violetta_app/features/translator/data/papago_scraping_service.dart';
 import 'package:violetta_app/features/translator/data/repositories/cached_translator_repository.dart';
+import 'package:violetta_app/features/vision/data/services/local_ocr_service.dart';
 import 'package:violetta_app/features/voice_control/data/services/native_bridge_service.dart';
 import 'package:violetta_app/features/voice_control/data/services/local_stt_service.dart';
 import 'package:violetta_app/features/voice_output/data/services/local_tts_service.dart';
@@ -35,7 +38,9 @@ class _HudMainScreenState extends State<HudMainScreen> {
   late final LocalSttService _localSttService;
   late final LocalTtsService _ttsService;
   late final ViolettaGeminiService _geminiService;
+  late final LocalOcrService _ocrService;
   final TextEditingController _textController = TextEditingController();
+  CameraController? _cameraController;
   Timer? _sttWatchdogTimer;
   Timer? _speakingFallbackTimer;
   Timer? _markerPulseTimer;
@@ -44,6 +49,7 @@ class _HudMainScreenState extends State<HudMainScreen> {
   AvatarAnimationState _currentAvatarState = AvatarAnimationState.idle;
   bool _isChatMode = false;
   bool _isListening = false;
+  bool _isOcrScanning = false;
   bool _isMarkerPulseExpanded = false;
   List<SpatialMarker> _spatialMarkers = <SpatialMarker>[];
   String _dialogText = 'Виолетта на связи. Напиши сообщение ниже.';
@@ -58,9 +64,40 @@ class _HudMainScreenState extends State<HudMainScreen> {
     _ttsService = LocalTtsService();
     _ttsService.setCompletionHandler(_onSpeechCompleted);
     _ttsService.init();
+    _ocrService = LocalOcrService();
+    _initCamera();
     _startMarkerPulse();
     if (_papagoSmokeTestEnabled) {
       _runPapagoSmokeTest();
+    }
+  }
+
+  Future<void> _initCamera() async {
+    try {
+      final List<CameraDescription> cameras = await availableCameras();
+      if (cameras.isEmpty) {
+        return;
+      }
+      final CameraDescription backCamera = cameras.firstWhere(
+        (CameraDescription camera) =>
+            camera.lensDirection == CameraLensDirection.back,
+        orElse: () => cameras.first,
+      );
+      final CameraController controller = CameraController(
+        backCamera,
+        ResolutionPreset.medium,
+        enableAudio: false,
+      );
+      await controller.initialize();
+      if (!mounted) {
+        await controller.dispose();
+        return;
+      }
+      setState(() {
+        _cameraController = controller;
+      });
+    } catch (error) {
+      debugPrint('[HUD] camera_init_error="$error"');
     }
   }
 
@@ -83,8 +120,83 @@ class _HudMainScreenState extends State<HudMainScreen> {
     _markerPulseTimer?.cancel();
     _localSttService.stopListening();
     _ttsService.stop();
+    _ocrService.dispose();
+    _cameraController?.dispose();
     _textController.dispose();
     super.dispose();
+  }
+
+  Future<void> _performOcrScan() async {
+    final CameraController? camera = _cameraController;
+    if (camera == null || !camera.value.isInitialized || _isOcrScanning) {
+      return;
+    }
+
+    await _ttsService.stop();
+    _speakingFallbackTimer?.cancel();
+
+    setState(() {
+      _isOcrScanning = true;
+      _assistantState = AssistantState.loading;
+      _currentAvatarState = AvatarAnimationState.loading;
+    });
+
+    try {
+      final XFile file = await camera.takePicture();
+      final InputImage inputImage = InputImage.fromFilePath(file.path);
+      final String text = await _ocrService.recognizeText(inputImage);
+
+      if (!mounted) {
+        return;
+      }
+
+      if (text.isEmpty) {
+        setState(() {
+          _dialogText = '[OCR]: Текст на кадре не обнаружен.';
+          _assistantState = AssistantState.idle;
+          _currentAvatarState = AvatarAnimationState.idle;
+        });
+        return;
+      }
+
+      _textController.text = text;
+      debugPrint('[HUD] ocr_text="$text"');
+
+      final String translated = await _translatorRepository.translate(
+        text,
+        source: 'ko',
+        target: 'ru',
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _dialogText = translated;
+        _assistantState = AssistantState.speaking;
+        _currentAvatarState = AvatarAnimationState.speaking;
+        _spatialMarkers = _generateSpatialMarkers();
+      });
+      await _ttsService.speak(translated, 'ru-RU');
+      _scheduleSpeakingFallback(translated);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      debugPrint('[HUD] ocr_scan_error="$error"');
+      setState(() {
+        _dialogText = '[OCR]: Не удалось отсканировать текст. Повтори попытку.';
+        _assistantState = AssistantState.error;
+        _currentAvatarState = AvatarAnimationState.idle;
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isOcrScanning = false;
+        });
+      }
+    }
   }
 
   void _startMarkerPulse() {
@@ -346,6 +458,7 @@ class _HudMainScreenState extends State<HudMainScreen> {
           child: Stack(
             children: [
               const NaverMapHudWidget(),
+              _buildHiddenCameraPreview(),
               _buildSpatialMarkersOverlay(),
               _buildHudStatusBar(
                 neonCyan: neonCyan,
@@ -375,6 +488,7 @@ class _HudMainScreenState extends State<HudMainScreen> {
               fit: StackFit.expand,
               children: [
                 const NaverMapHudWidget(),
+                _buildHiddenCameraPreview(),
                 _buildSpatialMarkersOverlay(),
                 SafeArea(
                   bottom: false,
@@ -728,6 +842,8 @@ class _HudMainScreenState extends State<HudMainScreen> {
           ),
         ),
         const SizedBox(width: 8),
+        _buildScanButton(),
+        const SizedBox(width: 8),
         _buildInteractionModeToggle(neonCyan: neonCyan, neonPink: neonPink),
         const SizedBox(width: 8),
         IconButton(
@@ -750,6 +866,65 @@ class _HudMainScreenState extends State<HudMainScreen> {
           child: const Icon(Icons.send_rounded),
         ),
       ],
+    );
+  }
+
+  Widget _buildHiddenCameraPreview() {
+    final CameraController? camera = _cameraController;
+    if (camera == null || !camera.value.isInitialized) {
+      return const SizedBox.shrink();
+    }
+    return Positioned(
+      left: 0,
+      top: 0,
+      child: SizedBox(
+        width: 1,
+        height: 1,
+        child: Opacity(opacity: 0.01, child: CameraPreview(camera)),
+      ),
+    );
+  }
+
+  Widget _buildScanButton() {
+    const Color neonYellow = Color(0xFFFFE566);
+    final bool canScan =
+        !_isOcrScanning &&
+        _assistantState != AssistantState.loading &&
+        (_cameraController?.value.isInitialized ?? false);
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: canScan ? _performOcrScan : null,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          decoration: BoxDecoration(
+            color: neonYellow.withOpacity(0.13),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: neonYellow.withOpacity(0.75)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.document_scanner,
+                color: canScan ? neonYellow : Colors.white38,
+                size: 18,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                'СКАН',
+                style: TextStyle(
+                  color: canScan ? neonYellow : Colors.white38,
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.3,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 

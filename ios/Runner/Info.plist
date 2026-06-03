@@ -49,5 +49,7 @@
 	<string>Виолетте нужен доступ к микрофону для распознавания команд.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Виолетте нужен доступ к распознаванию речи для перевода.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Виолетте нужен доступ к камере для локального OCR-сканирования текста.</string>
 </dict>
 </plist>
