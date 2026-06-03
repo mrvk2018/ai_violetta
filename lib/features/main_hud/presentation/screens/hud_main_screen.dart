@@ -1,11 +1,13 @@
 // ignore_for_file: deprecated_member_use
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-
-import '../../../assistant/data/gemini_service.dart';
-import '../../../assistant/domain/assistant_state.dart';
-import '../../../navigation/presentation/widgets/naver_map_hud_widget.dart';
-import '../../../translator/data/papago_scraping_service.dart';
+import 'package:violetta_app/core/presentation/layout/responsive_layout_info.dart';
+import 'package:violetta_app/features/ar_avatar/domain/avatar_state.dart';
+import 'package:violetta_app/features/ar_avatar/presentation/widgets/violetta_3d_view.dart';
+import 'package:violetta_app/features/assistant/domain/assistant_state.dart';
+import 'package:violetta_app/features/navigation/presentation/widgets/naver_map_hud_widget.dart';
+import 'package:violetta_app/features/translator/data/papago_scraping_service.dart';
 
 class HudMainScreen extends StatefulWidget {
   const HudMainScreen({super.key});
@@ -18,17 +20,16 @@ class _HudMainScreenState extends State<HudMainScreen> {
   static const bool _papagoSmokeTestEnabled =
       bool.fromEnvironment('PAPAGO_SMOKE_TEST', defaultValue: false);
 
-  late final ViolettaGeminiService _geminiService;
   late final PapagoScrapingService _papagoScrapingService;
   final TextEditingController _textController = TextEditingController();
 
   AssistantState _assistantState = AssistantState.idle;
+  AvatarAnimationState _currentAvatarState = AvatarAnimationState.idle;
   String _dialogText = 'Виолетта на связи. Напиши сообщение ниже.';
 
   @override
   void initState() {
     super.initState();
-    _geminiService = ViolettaGeminiService();
     _papagoScrapingService = PapagoScrapingService();
     if (_papagoSmokeTestEnabled) {
       _runPapagoSmokeTest();
@@ -61,61 +62,125 @@ class _HudMainScreenState extends State<HudMainScreen> {
 
     setState(() {
       _assistantState = AssistantState.loading;
+      _currentAvatarState = AvatarAnimationState.loading;
     });
 
     _textController.clear();
     debugPrint('[HUD] user_message="$message"');
 
     try {
-      final Future<String> translatedFuture = _papagoScrapingService.translate(
+      final String translated = await _papagoScrapingService.translate(
         text: message,
         source: 'ko',
         target: 'ru',
       );
-      final String answer = await _geminiService.sendMessage(message);
-      final String translated = await translatedFuture;
       if (!mounted) {
         return;
       }
       debugPrint('[HUD] papago_translation="$translated"');
-      debugPrint('[HUD] model_response="$answer"');
       setState(() {
-        _dialogText = answer;
+        _dialogText = translated;
         _assistantState = AssistantState.speaking;
+        _currentAvatarState = AvatarAnimationState.speaking;
       });
-    } catch (_) {
+      Future<void>.delayed(const Duration(seconds: 4), () {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _currentAvatarState = AvatarAnimationState.idle;
+          if (_assistantState == AssistantState.speaking) {
+            _assistantState = AssistantState.idle;
+          }
+        });
+      });
+    } catch (error) {
       if (!mounted) {
         return;
       }
-      debugPrint('[HUD] model_response_error');
+      debugPrint('[HUD] papago_translation_error="$error"');
       setState(() {
-        _dialogText = 'Я рядом, но сейчас не удалось ответить. Повтори запрос.';
+        _dialogText = 'Перевод временно недоступен. Работаю в fallback-режиме.';
         _assistantState = AssistantState.error;
+        _currentAvatarState = AvatarAnimationState.idle;
       });
+    } finally {
+      debugPrint('[HUD] papago_request_completed');
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final ResponsiveLayoutInfo layout = ResponsiveLayoutInfo.fromContext(context);
+    final MediaQueryData mediaQuery = MediaQuery.of(context);
     final Color neonCyan = const Color(0xFF00F5FF);
     final Color neonPink = const Color(0xFFFF4FCB);
 
-    return Scaffold(
-      backgroundColor: Colors.black.withOpacity(0.4),
-      body: SafeArea(
-        child: Stack(
-          children: [
-            const NaverMapHudWidget(),
-            _buildHudStatusBar(neonCyan: neonCyan, neonPink: neonPink),
-            _buildCharacterPlaceholder(neonCyan: neonCyan),
-            _buildDialogPanel(neonCyan: neonCyan, neonPink: neonPink),
-          ],
+    if (layout.formFactor == DeviceFormFactor.flat) {
+      return Scaffold(
+        backgroundColor: Colors.black.withOpacity(0.4),
+        body: SafeArea(
+          child: Stack(
+            children: [
+              const NaverMapHudWidget(),
+              _buildHudStatusBar(
+                neonCyan: neonCyan,
+                neonPink: neonPink,
+                formFactor: layout.formFactor,
+              ),
+              _buildCharacterView(
+                availableHeight: mediaQuery.size.height -
+                    mediaQuery.padding.top -
+                    mediaQuery.padding.bottom,
+              ),
+              _buildDialogOverlay(neonCyan: neonCyan, neonPink: neonPink),
+            ],
+          ),
         ),
+      );
+    }
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Column(
+        children: [
+          SizedBox(
+            height: layout.topPanelHeight,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                const NaverMapHudWidget(),
+                SafeArea(
+                  bottom: false,
+                  child: Stack(
+                    children: [
+                      _buildHudStatusBar(
+                        neonCyan: neonCyan,
+                        neonPink: neonPink,
+                        formFactor: layout.formFactor,
+                      ),
+                      _buildCharacterView(availableHeight: layout.topPanelHeight),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          SizedBox(height: layout.hingeHeight),
+          SizedBox(
+            height: layout.bottomPanelHeight,
+            child: _buildFlexedConsole(neonCyan: neonCyan, neonPink: neonPink),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildHudStatusBar({required Color neonCyan, required Color neonPink}) {
+  Widget _buildHudStatusBar({
+    required Color neonCyan,
+    required Color neonPink,
+    required DeviceFormFactor formFactor,
+  }) {
     return Align(
       alignment: Alignment.topCenter,
       child: Container(
@@ -142,57 +207,55 @@ class _HudMainScreenState extends State<HudMainScreen> {
             Icon(Icons.location_on_rounded, color: neonCyan, size: 20),
             const SizedBox(width: 6),
             Text('Seoul, KR', style: TextStyle(color: neonCyan, fontWeight: FontWeight.w600)),
+            if (kDebugMode) ...[
+              const SizedBox(width: 8),
+              _buildFormFactorDebugBadge(formFactor: formFactor),
+            ],
           ],
         ),
       ),
     );
   }
 
-  Widget _buildCharacterPlaceholder({required Color neonCyan}) {
-    return Align(
-      alignment: Alignment.center,
-      child: TweenAnimationBuilder<double>(
-        tween: Tween<double>(begin: 0.94, end: 1.05),
-        duration: const Duration(milliseconds: 1400),
-        curve: Curves.easeInOut,
-        onEnd: () {
-          if (mounted) {
-            setState(() {});
-          }
-        },
-        builder: (context, scale, child) {
-          return Transform.scale(scale: scale, child: child);
-        },
-        child: Container(
-          width: 190,
-          height: 190,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: neonCyan.withOpacity(0.08),
-            border: Border.all(color: neonCyan.withOpacity(0.85), width: 2),
-            boxShadow: [
-              BoxShadow(color: neonCyan.withOpacity(0.35), blurRadius: 22, spreadRadius: 2),
-            ],
-          ),
-          child: const Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.face_retouching_natural, size: 48, color: Colors.white),
-                SizedBox(height: 8),
-                Text(
-                  'Виолетта 3D [Idle]',
-                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
-                ),
-              ],
-            ),
-          ),
+  Widget _buildFormFactorDebugBadge({required DeviceFormFactor formFactor}) {
+    final bool isFlexed = formFactor == DeviceFormFactor.flexed;
+    final Color badgeColor = isFlexed ? const Color(0xFFFF4FCB) : const Color(0xFF47FF8A);
+    final String label = isFlexed ? '[FLEXED]' : '[FLAT]';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: badgeColor.withOpacity(0.16),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: badgeColor.withOpacity(0.75)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: badgeColor,
+          fontWeight: FontWeight.w700,
+          fontSize: 11,
+          letterSpacing: 0.4,
         ),
       ),
     );
   }
 
-  Widget _buildDialogPanel({required Color neonCyan, required Color neonPink}) {
+  Widget _buildCharacterView({required double availableHeight}) {
+    final double avatarSize =
+        (availableHeight * 0.48).clamp(150.0, 320.0);
+    return Align(
+      alignment: Alignment.center,
+      child: SizedBox(
+        width: avatarSize,
+        height: avatarSize,
+        child: Violetta3DView(
+          currentState: _currentAvatarState,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDialogOverlay({required Color neonCyan, required Color neonPink}) {
     return Align(
       alignment: Alignment.bottomCenter,
       child: Container(
@@ -214,6 +277,8 @@ class _HudMainScreenState extends State<HudMainScreen> {
               'Диалог',
               style: TextStyle(color: neonCyan, fontWeight: FontWeight.w700),
             ),
+            const SizedBox(height: 8),
+            _buildAvatarStateControlsInline(),
             const SizedBox(height: 8),
             AnimatedSwitcher(
               duration: const Duration(milliseconds: 180),
@@ -282,6 +347,169 @@ class _HudMainScreenState extends State<HudMainScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildFlexedConsole({required Color neonCyan, required Color neonPink}) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Colors.black.withOpacity(0.92),
+            const Color(0xFF12061B),
+          ],
+        ),
+        border: Border(
+          top: BorderSide(
+            color: neonPink.withOpacity(0.45),
+            width: 1.2,
+          ),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: neonPink.withOpacity(0.2),
+            blurRadius: 20,
+            offset: const Offset(0, -4),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        top: false,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Консоль Виолетты',
+                style: TextStyle(color: neonCyan, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 8),
+              _buildAvatarStateControlsInline(),
+              const SizedBox(height: 10),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 180),
+                child: _assistantState == AssistantState.loading
+                    ? Row(
+                        key: const ValueKey('loading_console'),
+                        children: [
+                          SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.2,
+                              color: neonCyan,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          const Text(
+                            'Виолетта думает...',
+                            style: TextStyle(color: Colors.white70),
+                          ),
+                        ],
+                      )
+                    : Text(
+                        _dialogText,
+                        key: const ValueKey('dialog_console'),
+                        style: const TextStyle(color: Colors.white),
+                      ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _textController,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        hintText: 'Напиши сообщение Виолетте...',
+                        hintStyle: const TextStyle(color: Colors.white54),
+                        filled: true,
+                        fillColor: Colors.black.withOpacity(0.35),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: neonCyan.withOpacity(0.5)),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: neonCyan),
+                        ),
+                      ),
+                      onSubmitted: (_) => _sendMessage(),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  ElevatedButton(
+                    onPressed: _assistantState == AssistantState.loading ? null : _sendMessage,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: neonPink.withOpacity(0.9),
+                      foregroundColor: Colors.white,
+                      minimumSize: const Size(52, 52),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: const Icon(Icons.send_rounded),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAvatarStateControlsInline() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.18),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            tooltip: 'Idle',
+            iconSize: 18,
+            splashRadius: 16,
+            color: Colors.white70,
+            onPressed: () {
+              setState(() {
+                _currentAvatarState = AvatarAnimationState.idle;
+              });
+            },
+            icon: const Icon(Icons.pause_circle_outline_rounded),
+          ),
+          IconButton(
+            tooltip: 'Loading',
+            iconSize: 18,
+            splashRadius: 16,
+            color: Colors.white70,
+            onPressed: () {
+              setState(() {
+                _currentAvatarState = AvatarAnimationState.loading;
+              });
+            },
+            icon: const Icon(Icons.sync_rounded),
+          ),
+          IconButton(
+            tooltip: 'Speaking',
+            iconSize: 18,
+            splashRadius: 16,
+            color: Colors.white70,
+            onPressed: () {
+              setState(() {
+                _currentAvatarState = AvatarAnimationState.speaking;
+              });
+            },
+            icon: const Icon(Icons.record_voice_over_rounded),
+          ),
+        ],
       ),
     );
   }
