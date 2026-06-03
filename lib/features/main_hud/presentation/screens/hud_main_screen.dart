@@ -1,5 +1,7 @@
 // ignore_for_file: deprecated_member_use
 
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:violetta_app/core/presentation/layout/responsive_layout_info.dart';
@@ -9,6 +11,7 @@ import 'package:violetta_app/features/assistant/domain/assistant_state.dart';
 import 'package:violetta_app/features/navigation/presentation/widgets/naver_map_hud_widget.dart';
 import 'package:violetta_app/features/translator/data/papago_scraping_service.dart';
 import 'package:violetta_app/features/translator/data/repositories/cached_translator_repository.dart';
+import 'package:violetta_app/features/voice_control/data/services/local_stt_service.dart';
 
 class HudMainScreen extends StatefulWidget {
   const HudMainScreen({super.key});
@@ -24,16 +27,21 @@ class _HudMainScreenState extends State<HudMainScreen> {
   );
 
   late final CachedTranslatorRepository _translatorRepository;
+  late final LocalSttService _localSttService;
   final TextEditingController _textController = TextEditingController();
+  Timer? _sttWatchdogTimer;
 
   AssistantState _assistantState = AssistantState.idle;
   AvatarAnimationState _currentAvatarState = AvatarAnimationState.idle;
+  bool _isListening = false;
   String _dialogText = 'Виолетта на связи. Напиши сообщение ниже.';
 
   @override
   void initState() {
     super.initState();
     _translatorRepository = CachedTranslatorRepository(PapagoScrapingService());
+    _localSttService = LocalSttService();
+    _localSttService.init();
     if (_papagoSmokeTestEnabled) {
       _runPapagoSmokeTest();
     }
@@ -53,8 +61,68 @@ class _HudMainScreenState extends State<HudMainScreen> {
 
   @override
   void dispose() {
+    _sttWatchdogTimer?.cancel();
+    _localSttService.stopListening();
     _textController.dispose();
     super.dispose();
+  }
+
+  void _handleSttResult(String recognizedText) {
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _textController.text = recognizedText;
+      _textController.selection = TextSelection.fromPosition(
+        TextPosition(offset: _textController.text.length),
+      );
+    });
+  }
+
+  void _startSttWatchdog() {
+    _sttWatchdogTimer?.cancel();
+    _sttWatchdogTimer = Timer.periodic(const Duration(milliseconds: 350), (
+      Timer timer,
+    ) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      if (_isListening && !_localSttService.isListening) {
+        timer.cancel();
+        setState(() {
+          _isListening = false;
+        });
+        _sendMessage();
+      }
+    });
+  }
+
+  void _toggleVoiceInput() {
+    if (_isListening) {
+      _stopVoiceInputAndSend();
+      return;
+    }
+    _localSttService.startListening(
+      onResult: _handleSttResult,
+      localeId: 'ko-KR',
+    );
+    setState(() {
+      _isListening = true;
+    });
+    _startSttWatchdog();
+  }
+
+  void _stopVoiceInputAndSend() {
+    _sttWatchdogTimer?.cancel();
+    _localSttService.stopListening();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _isListening = false;
+    });
+    _sendMessage();
   }
 
   Future<void> _sendMessage() async {
@@ -327,51 +395,10 @@ class _HudMainScreenState extends State<HudMainScreen> {
                     ),
             ),
             const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _textController,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      hintText: 'Напиши сообщение Виолетте...',
-                      hintStyle: const TextStyle(color: Colors.white54),
-                      filled: true,
-                      fillColor: Colors.black.withOpacity(0.25),
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 10,
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(
-                          color: neonCyan.withOpacity(0.5),
-                        ),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: neonCyan),
-                      ),
-                    ),
-                    onSubmitted: (_) => _sendMessage(),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                ElevatedButton(
-                  onPressed: _assistantState == AssistantState.loading
-                      ? null
-                      : _sendMessage,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: neonPink.withOpacity(0.9),
-                    foregroundColor: Colors.white,
-                    minimumSize: const Size(52, 52),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                  child: const Icon(Icons.send_rounded),
-                ),
-              ],
+            _buildMessageInputRow(
+              neonCyan: neonCyan,
+              neonPink: neonPink,
+              textFillOpacity: 0.25,
             ),
           ],
         ),
@@ -444,51 +471,10 @@ class _HudMainScreenState extends State<HudMainScreen> {
                       ),
               ),
               const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _textController,
-                      style: const TextStyle(color: Colors.white),
-                      decoration: InputDecoration(
-                        hintText: 'Напиши сообщение Виолетте...',
-                        hintStyle: const TextStyle(color: Colors.white54),
-                        filled: true,
-                        fillColor: Colors.black.withOpacity(0.35),
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 10,
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide(
-                            color: neonCyan.withOpacity(0.5),
-                          ),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide(color: neonCyan),
-                        ),
-                      ),
-                      onSubmitted: (_) => _sendMessage(),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  ElevatedButton(
-                    onPressed: _assistantState == AssistantState.loading
-                        ? null
-                        : _sendMessage,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: neonPink.withOpacity(0.9),
-                      foregroundColor: Colors.white,
-                      minimumSize: const Size(52, 52),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    child: const Icon(Icons.send_rounded),
-                  ),
-                ],
+              _buildMessageInputRow(
+                neonCyan: neonCyan,
+                neonPink: neonPink,
+                textFillOpacity: 0.35,
               ),
             ],
           ),
@@ -545,6 +531,63 @@ class _HudMainScreenState extends State<HudMainScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildMessageInputRow({
+    required Color neonCyan,
+    required Color neonPink,
+    required double textFillOpacity,
+  }) {
+    final bool canSend = _assistantState != AssistantState.loading;
+    return Row(
+      children: [
+        Expanded(
+          child: TextField(
+            controller: _textController,
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              hintText: 'Напиши сообщение Виолетте...',
+              hintStyle: const TextStyle(color: Colors.white54),
+              filled: true,
+              fillColor: Colors.black.withOpacity(textFillOpacity),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 10,
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: neonCyan.withOpacity(0.5)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: neonCyan),
+              ),
+            ),
+            onSubmitted: (_) => _sendMessage(),
+          ),
+        ),
+        const SizedBox(width: 8),
+        IconButton(
+          tooltip: _isListening ? 'Stop voice input' : 'Start voice input',
+          icon: const Icon(Icons.mic),
+          color: _isListening ? const Color(0xFFFF4FCB) : Colors.white70,
+          onPressed: canSend ? _toggleVoiceInput : null,
+        ),
+        const SizedBox(width: 8),
+        ElevatedButton(
+          onPressed: canSend ? _sendMessage : null,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: neonPink.withOpacity(0.9),
+            foregroundColor: Colors.white,
+            minimumSize: const Size(52, 52),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+          child: const Icon(Icons.send_rounded),
+        ),
+      ],
     );
   }
 }

@@ -45,5 +45,9 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Виолетте нужен доступ к микрофону для распознавания команд.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Виолетте нужен доступ к распознаванию речи для перевода.</string>
 </dict>
 </plist>
