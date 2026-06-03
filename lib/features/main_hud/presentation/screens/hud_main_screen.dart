@@ -16,6 +16,7 @@ import 'package:violetta_app/features/main_hud/domain/models/spatial_marker.dart
 import 'package:violetta_app/features/navigation/presentation/widgets/naver_map_hud_widget.dart';
 import 'package:violetta_app/features/translator/data/papago_scraping_service.dart';
 import 'package:violetta_app/features/translator/data/repositories/cached_translator_repository.dart';
+import 'package:violetta_app/features/gestures/data/services/air_gesture_service.dart';
 import 'package:violetta_app/features/vision/data/services/local_ocr_service.dart';
 import 'package:violetta_app/features/voice_control/data/services/native_bridge_service.dart';
 import 'package:violetta_app/features/voice_control/data/services/local_stt_service.dart';
@@ -39,8 +40,11 @@ class _HudMainScreenState extends State<HudMainScreen> {
   late final LocalTtsService _ttsService;
   late final ViolettaGeminiService _geminiService;
   late final LocalOcrService _ocrService;
+  final AirGestureService _airGestureService = AirGestureService();
   final TextEditingController _textController = TextEditingController();
   CameraController? _cameraController;
+  CameraController? _frontCameraController;
+  bool _isGestureStreamActive = false;
   Timer? _sttWatchdogTimer;
   Timer? _speakingFallbackTimer;
   Timer? _markerPulseTimer;
@@ -65,40 +69,136 @@ class _HudMainScreenState extends State<HudMainScreen> {
     _ttsService.setCompletionHandler(_onSpeechCompleted);
     _ttsService.init();
     _ocrService = LocalOcrService();
-    _initCamera();
+    _initCameras();
     _startMarkerPulse();
     if (_papagoSmokeTestEnabled) {
       _runPapagoSmokeTest();
     }
   }
 
-  Future<void> _initCamera() async {
+  Future<void> _initCameras() async {
     try {
       final List<CameraDescription> cameras = await availableCameras();
       if (cameras.isEmpty) {
         return;
       }
+
       final CameraDescription backCamera = cameras.firstWhere(
         (CameraDescription camera) =>
             camera.lensDirection == CameraLensDirection.back,
         orElse: () => cameras.first,
       );
-      final CameraController controller = CameraController(
+      final CameraController backController = CameraController(
         backCamera,
         ResolutionPreset.medium,
         enableAudio: false,
       );
-      await controller.initialize();
+      await backController.initialize();
+
+      CameraController? frontController;
+      try {
+        final CameraDescription frontCamera = cameras.firstWhere(
+          (CameraDescription camera) =>
+              camera.lensDirection == CameraLensDirection.front,
+        );
+        frontController = CameraController(
+          frontCamera,
+          ResolutionPreset.low,
+          enableAudio: false,
+        );
+        await frontController.initialize();
+      } catch (_) {
+        await frontController?.dispose();
+        frontController = null;
+      }
+
       if (!mounted) {
-        await controller.dispose();
+        await backController.dispose();
+        await frontController?.dispose();
         return;
       }
+
       setState(() {
-        _cameraController = controller;
+        _cameraController = backController;
+        _frontCameraController = frontController;
       });
+
+      if (_isChatMode) {
+        await _startGestureStream();
+      }
     } catch (error) {
       debugPrint('[HUD] camera_init_error="$error"');
     }
+  }
+
+  Future<void> _startGestureStream() async {
+    if (!_isChatMode) {
+      return;
+    }
+    final CameraController? camera = _frontCameraController;
+    if (camera == null ||
+        !camera.value.isInitialized ||
+        _isGestureStreamActive ||
+        camera.value.isStreamingImages) {
+      return;
+    }
+
+    try {
+      await camera.startImageStream(_onGestureCameraImage);
+      _isGestureStreamActive = true;
+      debugPrint('[HUD] gesture_stream_started');
+    } catch (error) {
+      debugPrint('[HUD] gesture_stream_start_error="$error"');
+    }
+  }
+
+  Future<void> _stopGestureStream() async {
+    final CameraController? camera = _frontCameraController;
+    if (camera == null || !_isGestureStreamActive) {
+      return;
+    }
+
+    try {
+      if (camera.value.isStreamingImages) {
+        await camera.stopImageStream();
+      }
+    } catch (error) {
+      debugPrint('[HUD] gesture_stream_stop_error="$error"');
+    } finally {
+      _isGestureStreamActive = false;
+      debugPrint('[HUD] gesture_stream_stopped');
+    }
+  }
+
+  void _onGestureCameraImage(CameraImage image) {
+    if (!_isChatMode) {
+      return;
+    }
+    if (_airGestureService.detectAirSwipe(image)) {
+      _handleAirSwipeDetected();
+    }
+  }
+
+  void _handleAirSwipeDetected() {
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _dialogText = '[ЖЕСТ]: Air Swipe вверх!';
+      _currentAvatarState = AvatarAnimationState.loading;
+    });
+    NativeBridgeService.performSystemSwipe();
+    Future<void>.delayed(const Duration(seconds: 1), () {
+      if (!mounted) {
+        return;
+      }
+      if (_currentAvatarState == AvatarAnimationState.loading &&
+          _dialogText == '[ЖЕСТ]: Air Swipe вверх!') {
+        setState(() {
+          _currentAvatarState = AvatarAnimationState.idle;
+        });
+      }
+    });
   }
 
   Future<void> _runPapagoSmokeTest() async {
@@ -121,7 +221,9 @@ class _HudMainScreenState extends State<HudMainScreen> {
     _localSttService.stopListening();
     _ttsService.stop();
     _ocrService.dispose();
+    _stopGestureStream();
     _cameraController?.dispose();
+    _frontCameraController?.dispose();
     _textController.dispose();
     super.dispose();
   }
@@ -943,9 +1045,15 @@ class _HudMainScreenState extends State<HudMainScreen> {
           if (_assistantState == AssistantState.loading) {
             return;
           }
+          final bool nextChatMode = !_isChatMode;
           setState(() {
-            _isChatMode = !_isChatMode;
+            _isChatMode = nextChatMode;
           });
+          if (nextChatMode) {
+            _startGestureStream();
+          } else {
+            _stopGestureStream();
+          }
         },
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
