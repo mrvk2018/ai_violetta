@@ -12,6 +12,7 @@ import 'package:violetta_app/features/navigation/presentation/widgets/naver_map_
 import 'package:violetta_app/features/translator/data/papago_scraping_service.dart';
 import 'package:violetta_app/features/translator/data/repositories/cached_translator_repository.dart';
 import 'package:violetta_app/features/voice_control/data/services/local_stt_service.dart';
+import 'package:violetta_app/features/voice_output/data/services/local_tts_service.dart';
 
 class HudMainScreen extends StatefulWidget {
   const HudMainScreen({super.key});
@@ -28,8 +29,10 @@ class _HudMainScreenState extends State<HudMainScreen> {
 
   late final CachedTranslatorRepository _translatorRepository;
   late final LocalSttService _localSttService;
+  late final LocalTtsService _ttsService;
   final TextEditingController _textController = TextEditingController();
   Timer? _sttWatchdogTimer;
+  Timer? _speakingFallbackTimer;
 
   AssistantState _assistantState = AssistantState.idle;
   AvatarAnimationState _currentAvatarState = AvatarAnimationState.idle;
@@ -42,6 +45,9 @@ class _HudMainScreenState extends State<HudMainScreen> {
     _translatorRepository = CachedTranslatorRepository(PapagoScrapingService());
     _localSttService = LocalSttService();
     _localSttService.init();
+    _ttsService = LocalTtsService();
+    _ttsService.setCompletionHandler(_onSpeechCompleted);
+    _ttsService.init();
     if (_papagoSmokeTestEnabled) {
       _runPapagoSmokeTest();
     }
@@ -62,9 +68,32 @@ class _HudMainScreenState extends State<HudMainScreen> {
   @override
   void dispose() {
     _sttWatchdogTimer?.cancel();
+    _speakingFallbackTimer?.cancel();
     _localSttService.stopListening();
+    _ttsService.stop();
     _textController.dispose();
     super.dispose();
+  }
+
+  void _onSpeechCompleted() {
+    if (!mounted) {
+      return;
+    }
+    _speakingFallbackTimer?.cancel();
+    setState(() {
+      _currentAvatarState = AvatarAnimationState.idle;
+      if (_assistantState == AssistantState.speaking) {
+        _assistantState = AssistantState.idle;
+      }
+    });
+  }
+
+  void _scheduleSpeakingFallback(String spokenText) {
+    _speakingFallbackTimer?.cancel();
+    final int estimatedMs = (spokenText.length * 85).clamp(2500, 9000);
+    _speakingFallbackTimer = Timer(Duration(milliseconds: estimatedMs), () {
+      _onSpeechCompleted();
+    });
   }
 
   void _handleSttResult(String recognizedText) {
@@ -131,6 +160,9 @@ class _HudMainScreenState extends State<HudMainScreen> {
       return;
     }
 
+    await _ttsService.stop();
+    _speakingFallbackTimer?.cancel();
+
     setState(() {
       _assistantState = AssistantState.loading;
       _currentAvatarState = AvatarAnimationState.loading;
@@ -154,22 +186,14 @@ class _HudMainScreenState extends State<HudMainScreen> {
         _assistantState = AssistantState.speaking;
         _currentAvatarState = AvatarAnimationState.speaking;
       });
-      Future<void>.delayed(const Duration(seconds: 4), () {
-        if (!mounted) {
-          return;
-        }
-        setState(() {
-          _currentAvatarState = AvatarAnimationState.idle;
-          if (_assistantState == AssistantState.speaking) {
-            _assistantState = AssistantState.idle;
-          }
-        });
-      });
+      await _ttsService.speak(translated, 'ko-KR');
+      _scheduleSpeakingFallback(translated);
     } catch (error) {
       if (!mounted) {
         return;
       }
       debugPrint('[HUD] papago_translation_error="$error"');
+      await _ttsService.stop();
       setState(() {
         _dialogText = 'Перевод временно недоступен. Работаю в fallback-режиме.';
         _assistantState = AssistantState.error;
@@ -498,9 +522,17 @@ class _HudMainScreenState extends State<HudMainScreen> {
             iconSize: 18,
             splashRadius: 16,
             color: Colors.white70,
-            onPressed: () {
+            onPressed: () async {
+              _speakingFallbackTimer?.cancel();
+              await _ttsService.stop();
+              if (!mounted) {
+                return;
+              }
               setState(() {
                 _currentAvatarState = AvatarAnimationState.idle;
+                if (_assistantState == AssistantState.speaking) {
+                  _assistantState = AssistantState.idle;
+                }
               });
             },
             icon: const Icon(Icons.pause_circle_outline_rounded),
