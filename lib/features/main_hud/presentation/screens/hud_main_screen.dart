@@ -262,11 +262,12 @@ class _HudMainScreenState extends State<HudMainScreen> {
       }
 
       _textController.text = text;
-      debugPrint('[HUD] ocr_text="$text"');
+      final String ocrSource = _ocrService.papagoSourceForText(text);
+      debugPrint('[HUD] ocr_text="$text" source="$ocrSource"');
 
       final String translated = await _translatorRepository.translate(
         text,
-        source: 'ko',
+        source: ocrSource,
         target: 'ru',
       );
 
@@ -507,12 +508,15 @@ class _HudMainScreenState extends State<HudMainScreen> {
         replyText = await _geminiService.sendMessage(message);
         ttsLocaleId = 'ru-RU';
       } else {
+        final bool latinOnly = _ocrService.isLatinOnly(message);
+        final String source = latinOnly ? 'en' : 'ru';
+        final String target = latinOnly ? 'ru' : 'ko';
         replyText = await _translatorRepository.translate(
           message,
-          source: 'ru',
-          target: 'ko',
+          source: source,
+          target: target,
         );
-        ttsLocaleId = 'ko-KR';
+        ttsLocaleId = latinOnly ? 'ru-RU' : 'ko-KR';
       }
       if (!mounted) {
         return;
