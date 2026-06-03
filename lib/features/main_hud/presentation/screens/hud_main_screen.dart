@@ -1,6 +1,7 @@
 // ignore_for_file: deprecated_member_use
 
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -9,6 +10,7 @@ import 'package:violetta_app/features/ar_avatar/domain/avatar_state.dart';
 import 'package:violetta_app/features/ar_avatar/presentation/widgets/violetta_3d_view.dart';
 import 'package:violetta_app/features/assistant/data/gemini_service.dart';
 import 'package:violetta_app/features/assistant/domain/assistant_state.dart';
+import 'package:violetta_app/features/main_hud/domain/models/spatial_marker.dart';
 import 'package:violetta_app/features/navigation/presentation/widgets/naver_map_hud_widget.dart';
 import 'package:violetta_app/features/translator/data/papago_scraping_service.dart';
 import 'package:violetta_app/features/translator/data/repositories/cached_translator_repository.dart';
@@ -35,11 +37,14 @@ class _HudMainScreenState extends State<HudMainScreen> {
   final TextEditingController _textController = TextEditingController();
   Timer? _sttWatchdogTimer;
   Timer? _speakingFallbackTimer;
+  Timer? _markerPulseTimer;
 
   AssistantState _assistantState = AssistantState.idle;
   AvatarAnimationState _currentAvatarState = AvatarAnimationState.idle;
   bool _isChatMode = false;
   bool _isListening = false;
+  bool _isMarkerPulseExpanded = false;
+  List<SpatialMarker> _spatialMarkers = <SpatialMarker>[];
   String _dialogText = 'Виолетта на связи. Напиши сообщение ниже.';
 
   @override
@@ -52,6 +57,7 @@ class _HudMainScreenState extends State<HudMainScreen> {
     _ttsService = LocalTtsService();
     _ttsService.setCompletionHandler(_onSpeechCompleted);
     _ttsService.init();
+    _startMarkerPulse();
     if (_papagoSmokeTestEnabled) {
       _runPapagoSmokeTest();
     }
@@ -73,10 +79,44 @@ class _HudMainScreenState extends State<HudMainScreen> {
   void dispose() {
     _sttWatchdogTimer?.cancel();
     _speakingFallbackTimer?.cancel();
+    _markerPulseTimer?.cancel();
     _localSttService.stopListening();
     _ttsService.stop();
     _textController.dispose();
     super.dispose();
+  }
+
+  void _startMarkerPulse() {
+    _markerPulseTimer?.cancel();
+    _markerPulseTimer = Timer.periodic(const Duration(milliseconds: 900), (
+      Timer timer,
+    ) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      setState(() {
+        _isMarkerPulseExpanded = !_isMarkerPulseExpanded;
+      });
+    });
+  }
+
+  List<SpatialMarker> _generateSpatialMarkers() {
+    final Random random = Random();
+    final int markerCount = 2 + random.nextInt(2);
+    return List<SpatialMarker>.generate(markerCount, (int index) {
+      final String labelPrefix = index == 0
+          ? 'TARGET_POI'
+          : index == 1
+          ? 'SCAN_NODE'
+          : 'AR_TRACE';
+      return SpatialMarker(
+        id: 'marker_$index',
+        title: '${labelPrefix}_${String.fromCharCode(65 + index)}',
+        topRatio: 0.2 + random.nextDouble() * 0.52,
+        leftRatio: 0.1 + random.nextDouble() * 0.72,
+      );
+    });
   }
 
   void _onSpeechCompleted() {
@@ -199,6 +239,7 @@ class _HudMainScreenState extends State<HudMainScreen> {
         _dialogText = replyText;
         _assistantState = AssistantState.speaking;
         _currentAvatarState = AvatarAnimationState.speaking;
+        _spatialMarkers = _generateSpatialMarkers();
       });
       await _ttsService.speak(replyText, ttsLocaleId);
       _scheduleSpeakingFallback(replyText);
@@ -234,6 +275,7 @@ class _HudMainScreenState extends State<HudMainScreen> {
           child: Stack(
             children: [
               const NaverMapHudWidget(),
+              _buildSpatialMarkersOverlay(),
               _buildHudStatusBar(
                 neonCyan: neonCyan,
                 neonPink: neonPink,
@@ -262,6 +304,7 @@ class _HudMainScreenState extends State<HudMainScreen> {
               fit: StackFit.expand,
               children: [
                 const NaverMapHudWidget(),
+                _buildSpatialMarkersOverlay(),
                 SafeArea(
                   bottom: false,
                   child: Stack(
@@ -681,6 +724,76 @@ class _HudMainScreenState extends State<HudMainScreen> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSpatialMarkersOverlay() {
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: LayoutBuilder(
+          builder: (BuildContext context, BoxConstraints constraints) {
+            final Color neonMarker = const Color(0xFF00F5FF);
+            return Stack(
+              children: _spatialMarkers.map((SpatialMarker marker) {
+                final double top = constraints.maxHeight * marker.topRatio;
+                final double left = constraints.maxWidth * marker.leftRatio;
+                return Positioned(
+                  top: top,
+                  left: left,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      AnimatedScale(
+                        scale: _isMarkerPulseExpanded ? 1.18 : 0.92,
+                        duration: const Duration(milliseconds: 900),
+                        curve: Curves.easeInOut,
+                        child: Container(
+                          width: 12,
+                          height: 12,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: neonMarker.withOpacity(0.9),
+                            boxShadow: [
+                              BoxShadow(
+                                color: neonMarker.withOpacity(0.95),
+                                blurRadius: 14,
+                                spreadRadius: 1.2,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.35),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: neonMarker.withOpacity(0.8),
+                          ),
+                        ),
+                        child: Text(
+                          marker.title,
+                          style: TextStyle(
+                            color: neonMarker,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.4,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }).toList(),
+            );
+          },
         ),
       ),
     );
