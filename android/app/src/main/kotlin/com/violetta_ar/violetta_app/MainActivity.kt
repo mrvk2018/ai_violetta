@@ -44,11 +44,20 @@ class MainActivity : FlutterActivity() {
                 }
 
                 "performSwipe" -> {
-                    Log.d(
-                        "VIOLETTA_NATIVE",
-                        "Native swipe triggered via voice command",
-                    )
-                    result.success(null)
+                    if (ViolettaAccessibilityService.instance != null) {
+                        ViolettaAccessibilityService.instance?.swipeUp()
+                        Log.d(
+                            "VIOLETTA_NATIVE",
+                            "Native swipe up dispatched via Accessibility Service",
+                        )
+                        result.success(null)
+                    } else {
+                        result.error(
+                            "UNAVAILABLE",
+                            "Accessibility Service не запущен. Включите его в настройках телефона.",
+                            null,
+                        )
+                    }
                 }
 
                 else -> result.notImplemented()
