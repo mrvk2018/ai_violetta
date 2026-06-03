@@ -14,6 +14,7 @@ import 'package:violetta_app/features/main_hud/domain/models/spatial_marker.dart
 import 'package:violetta_app/features/navigation/presentation/widgets/naver_map_hud_widget.dart';
 import 'package:violetta_app/features/translator/data/papago_scraping_service.dart';
 import 'package:violetta_app/features/translator/data/repositories/cached_translator_repository.dart';
+import 'package:violetta_app/features/voice_control/data/services/native_bridge_service.dart';
 import 'package:violetta_app/features/voice_control/data/services/local_stt_service.dart';
 import 'package:violetta_app/features/voice_output/data/services/local_tts_service.dart';
 
@@ -198,6 +199,68 @@ class _HudMainScreenState extends State<HudMainScreen> {
     _sendMessage();
   }
 
+  /// Hands-free OS commands — only in ВИОЛЕТТА ИИ mode; never in translator mode.
+  Future<bool> _interceptChatModeVoiceCommand(String rawMessage) async {
+    final String lowerMessage = rawMessage.toLowerCase();
+
+    if (lowerMessage.contains('открой тикток') ||
+        lowerMessage.contains('open tiktok') ||
+        lowerMessage.contains('включи тикток')) {
+      await _ttsService.stop();
+      _speakingFallbackTimer?.cancel();
+      if (!mounted) {
+        return true;
+      }
+      setState(() {
+        _textController.clear();
+        _spatialMarkers = <SpatialMarker>[];
+        _dialogText = '[СИСТЕМА]: Запуск TikTok...';
+        _assistantState = AssistantState.speaking;
+        _currentAvatarState = AvatarAnimationState.speaking;
+      });
+      await _ttsService.speak('Открываю Тикток', 'ru-RU');
+      _scheduleSpeakingFallback('Открываю Тикток');
+      await NativeBridgeService.openApp('com.zhiliaoapp.musically');
+      return true;
+    }
+
+    if (lowerMessage.contains('дальше') ||
+        lowerMessage.contains('пролистай') ||
+        lowerMessage.contains('следующий') ||
+        lowerMessage.contains('свайп')) {
+      if (!mounted) {
+        return true;
+      }
+      setState(() {
+        _textController.clear();
+      });
+      await NativeBridgeService.performSystemSwipe();
+      return true;
+    }
+
+    if (lowerMessage.contains('открой ютуб') ||
+        lowerMessage.contains('open youtube') ||
+        lowerMessage.contains('включи ютуб')) {
+      await _ttsService.stop();
+      _speakingFallbackTimer?.cancel();
+      if (!mounted) {
+        return true;
+      }
+      setState(() {
+        _textController.clear();
+        _dialogText = '[СИСТЕМА]: Запуск YouTube...';
+        _assistantState = AssistantState.speaking;
+        _currentAvatarState = AvatarAnimationState.speaking;
+      });
+      await _ttsService.speak('Запускаю Ютуб', 'ru-RU');
+      _scheduleSpeakingFallback('Запускаю Ютуб');
+      await NativeBridgeService.openApp('com.google.android.youtube');
+      return true;
+    }
+
+    return false;
+  }
+
   Future<void> _sendMessage() async {
     final String message = _textController.text.trim();
     if (message.isEmpty) {
@@ -206,6 +269,14 @@ class _HudMainScreenState extends State<HudMainScreen> {
 
     await _ttsService.stop();
     _speakingFallbackTimer?.cancel();
+
+    if (_isChatMode) {
+      final bool commandHandled = await _interceptChatModeVoiceCommand(message);
+      if (commandHandled) {
+        debugPrint('[HUD] hands_free_command="$message"');
+        return;
+      }
+    }
 
     setState(() {
       _assistantState = AssistantState.loading;
