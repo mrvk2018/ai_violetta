@@ -5,10 +5,7 @@ import 'package:violetta_app/features/ar_avatar/domain/avatar_state.dart';
 class Violetta3DView extends StatefulWidget {
   final AvatarAnimationState currentState;
 
-  const Violetta3DView({
-    super.key,
-    required this.currentState,
-  });
+  const Violetta3DView({super.key, required this.currentState});
 
   @override
   State<Violetta3DView> createState() => _Violetta3DViewState();
@@ -36,6 +33,11 @@ class _Violetta3DViewState extends State<Violetta3DView>
 
   void _updateAnimation() {
     _o3dController.animationName = widget.currentState.trackName;
+  }
+
+  void _applyHologramCamera() {
+    _o3dController.cameraOrbit(0, 75, 105);
+    _o3dController.cameraTarget(0, 1, 0);
   }
 
   @override
@@ -76,6 +78,8 @@ class _Violetta3DViewState extends State<Violetta3DView>
       autoRotate: false,
       shadowIntensity: 0.0,
       backgroundColor: Colors.transparent,
+      fieldOfView: '32deg',
+      onWebViewCreated: (_) => _applyHologramCamera(),
     );
   }
 }
