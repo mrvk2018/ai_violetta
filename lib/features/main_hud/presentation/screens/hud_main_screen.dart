@@ -8,6 +8,7 @@ import 'package:violetta_app/features/ar_avatar/presentation/widgets/violetta_3d
 import 'package:violetta_app/features/assistant/domain/assistant_state.dart';
 import 'package:violetta_app/features/navigation/presentation/widgets/naver_map_hud_widget.dart';
 import 'package:violetta_app/features/translator/data/papago_scraping_service.dart';
+import 'package:violetta_app/features/translator/data/repositories/cached_translator_repository.dart';
 
 class HudMainScreen extends StatefulWidget {
   const HudMainScreen({super.key});
@@ -17,10 +18,12 @@ class HudMainScreen extends StatefulWidget {
 }
 
 class _HudMainScreenState extends State<HudMainScreen> {
-  static const bool _papagoSmokeTestEnabled =
-      bool.fromEnvironment('PAPAGO_SMOKE_TEST', defaultValue: false);
+  static const bool _papagoSmokeTestEnabled = bool.fromEnvironment(
+    'PAPAGO_SMOKE_TEST',
+    defaultValue: false,
+  );
 
-  late final PapagoScrapingService _papagoScrapingService;
+  late final CachedTranslatorRepository _translatorRepository;
   final TextEditingController _textController = TextEditingController();
 
   AssistantState _assistantState = AssistantState.idle;
@@ -30,15 +33,15 @@ class _HudMainScreenState extends State<HudMainScreen> {
   @override
   void initState() {
     super.initState();
-    _papagoScrapingService = PapagoScrapingService();
+    _translatorRepository = CachedTranslatorRepository(PapagoScrapingService());
     if (_papagoSmokeTestEnabled) {
       _runPapagoSmokeTest();
     }
   }
 
   Future<void> _runPapagoSmokeTest() async {
-    final String translated = await _papagoScrapingService.translate(
-      text: '안녕하세요',
+    final String translated = await _translatorRepository.translate(
+      '안녕하세요',
       source: 'ko',
       target: 'ru',
     );
@@ -69,8 +72,8 @@ class _HudMainScreenState extends State<HudMainScreen> {
     debugPrint('[HUD] user_message="$message"');
 
     try {
-      final String translated = await _papagoScrapingService.translate(
-        text: message,
+      final String translated = await _translatorRepository.translate(
+        message,
         source: 'ko',
         target: 'ru',
       );
@@ -111,7 +114,9 @@ class _HudMainScreenState extends State<HudMainScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final ResponsiveLayoutInfo layout = ResponsiveLayoutInfo.fromContext(context);
+    final ResponsiveLayoutInfo layout = ResponsiveLayoutInfo.fromContext(
+      context,
+    );
     final MediaQueryData mediaQuery = MediaQuery.of(context);
     final Color neonCyan = const Color(0xFF00F5FF);
     final Color neonPink = const Color(0xFFFF4FCB);
@@ -129,7 +134,8 @@ class _HudMainScreenState extends State<HudMainScreen> {
                 formFactor: layout.formFactor,
               ),
               _buildCharacterView(
-                availableHeight: mediaQuery.size.height -
+                availableHeight:
+                    mediaQuery.size.height -
                     mediaQuery.padding.top -
                     mediaQuery.padding.bottom,
               ),
@@ -159,7 +165,9 @@ class _HudMainScreenState extends State<HudMainScreen> {
                         neonPink: neonPink,
                         formFactor: layout.formFactor,
                       ),
-                      _buildCharacterView(availableHeight: layout.topPanelHeight),
+                      _buildCharacterView(
+                        availableHeight: layout.topPanelHeight,
+                      ),
                     ],
                   ),
                 ),
@@ -198,15 +206,24 @@ class _HudMainScreenState extends State<HudMainScreen> {
           children: [
             Icon(Icons.battery_full_rounded, color: neonCyan, size: 20),
             const SizedBox(width: 6),
-            Text('89%', style: TextStyle(color: neonCyan, fontWeight: FontWeight.w600)),
+            Text(
+              '89%',
+              style: TextStyle(color: neonCyan, fontWeight: FontWeight.w600),
+            ),
             const Spacer(),
             Icon(Icons.network_wifi_rounded, color: neonPink, size: 20),
             const SizedBox(width: 6),
-            Text('Online', style: TextStyle(color: neonPink, fontWeight: FontWeight.w600)),
+            Text(
+              'Online',
+              style: TextStyle(color: neonPink, fontWeight: FontWeight.w600),
+            ),
             const Spacer(),
             Icon(Icons.location_on_rounded, color: neonCyan, size: 20),
             const SizedBox(width: 6),
-            Text('Seoul, KR', style: TextStyle(color: neonCyan, fontWeight: FontWeight.w600)),
+            Text(
+              'Seoul, KR',
+              style: TextStyle(color: neonCyan, fontWeight: FontWeight.w600),
+            ),
             if (kDebugMode) ...[
               const SizedBox(width: 8),
               _buildFormFactorDebugBadge(formFactor: formFactor),
@@ -219,7 +236,9 @@ class _HudMainScreenState extends State<HudMainScreen> {
 
   Widget _buildFormFactorDebugBadge({required DeviceFormFactor formFactor}) {
     final bool isFlexed = formFactor == DeviceFormFactor.flexed;
-    final Color badgeColor = isFlexed ? const Color(0xFFFF4FCB) : const Color(0xFF47FF8A);
+    final Color badgeColor = isFlexed
+        ? const Color(0xFFFF4FCB)
+        : const Color(0xFF47FF8A);
     final String label = isFlexed ? '[FLEXED]' : '[FLAT]';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -241,21 +260,21 @@ class _HudMainScreenState extends State<HudMainScreen> {
   }
 
   Widget _buildCharacterView({required double availableHeight}) {
-    final double avatarSize =
-        (availableHeight * 0.48).clamp(150.0, 320.0);
+    final double avatarSize = (availableHeight * 0.48).clamp(150.0, 320.0);
     return Align(
       alignment: Alignment.center,
       child: SizedBox(
         width: avatarSize,
         height: avatarSize,
-        child: Violetta3DView(
-          currentState: _currentAvatarState,
-        ),
+        child: Violetta3DView(currentState: _currentAvatarState),
       ),
     );
   }
 
-  Widget _buildDialogOverlay({required Color neonCyan, required Color neonPink}) {
+  Widget _buildDialogOverlay({
+    required Color neonCyan,
+    required Color neonPink,
+  }) {
     return Align(
       alignment: Alignment.bottomCenter,
       child: Container(
@@ -319,10 +338,15 @@ class _HudMainScreenState extends State<HudMainScreen> {
                       hintStyle: const TextStyle(color: Colors.white54),
                       filled: true,
                       fillColor: Colors.black.withOpacity(0.25),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: neonCyan.withOpacity(0.5)),
+                        borderSide: BorderSide(
+                          color: neonCyan.withOpacity(0.5),
+                        ),
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
@@ -334,12 +358,16 @@ class _HudMainScreenState extends State<HudMainScreen> {
                 ),
                 const SizedBox(width: 10),
                 ElevatedButton(
-                  onPressed: _assistantState == AssistantState.loading ? null : _sendMessage,
+                  onPressed: _assistantState == AssistantState.loading
+                      ? null
+                      : _sendMessage,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: neonPink.withOpacity(0.9),
                     foregroundColor: Colors.white,
                     minimumSize: const Size(52, 52),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                   ),
                   child: const Icon(Icons.send_rounded),
                 ),
@@ -351,7 +379,10 @@ class _HudMainScreenState extends State<HudMainScreen> {
     );
   }
 
-  Widget _buildFlexedConsole({required Color neonCyan, required Color neonPink}) {
+  Widget _buildFlexedConsole({
+    required Color neonCyan,
+    required Color neonPink,
+  }) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
@@ -359,16 +390,10 @@ class _HudMainScreenState extends State<HudMainScreen> {
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [
-            Colors.black.withOpacity(0.92),
-            const Color(0xFF12061B),
-          ],
+          colors: [Colors.black.withOpacity(0.92), const Color(0xFF12061B)],
         ),
         border: Border(
-          top: BorderSide(
-            color: neonPink.withOpacity(0.45),
-            width: 1.2,
-          ),
+          top: BorderSide(color: neonPink.withOpacity(0.45), width: 1.2),
         ),
         boxShadow: [
           BoxShadow(
@@ -430,10 +455,15 @@ class _HudMainScreenState extends State<HudMainScreen> {
                         hintStyle: const TextStyle(color: Colors.white54),
                         filled: true,
                         fillColor: Colors.black.withOpacity(0.35),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
                         enabledBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide(color: neonCyan.withOpacity(0.5)),
+                          borderSide: BorderSide(
+                            color: neonCyan.withOpacity(0.5),
+                          ),
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
@@ -445,12 +475,16 @@ class _HudMainScreenState extends State<HudMainScreen> {
                   ),
                   const SizedBox(width: 10),
                   ElevatedButton(
-                    onPressed: _assistantState == AssistantState.loading ? null : _sendMessage,
+                    onPressed: _assistantState == AssistantState.loading
+                        ? null
+                        : _sendMessage,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: neonPink.withOpacity(0.9),
                       foregroundColor: Colors.white,
                       minimumSize: const Size(52, 52),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                     ),
                     child: const Icon(Icons.send_rounded),
                   ),
