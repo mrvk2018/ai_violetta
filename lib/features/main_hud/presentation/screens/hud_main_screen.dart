@@ -12,10 +12,14 @@ import 'package:violetta_app/features/ar_avatar/domain/avatar_state.dart';
 import 'package:violetta_app/features/avatar/application/violetta_gesture_binding_controller.dart';
 import 'package:violetta_app/features/avatar/application/violetta_lipsync_controller.dart';
 import 'package:violetta_app/features/avatar/presentation/widgets/violetta_3d_view.dart';
-import 'package:violetta_app/features/ai_brain/services/violetta_command_service.dart';
+import 'package:violetta_app/features/assistant/application/violetta_command_service.dart';
 import 'package:violetta_app/features/ai_brain/services/violetta_gemini_service.dart';
 import 'package:violetta_app/features/assistant/domain/assistant_state.dart';
 import 'package:violetta_app/features/main_hud/domain/models/spatial_marker.dart';
+import 'package:violetta_app/features/onboarding/application/violetta_locale_controller.dart';
+import 'package:violetta_app/features/onboarding/application/violetta_locale_scope.dart';
+import 'package:violetta_app/features/onboarding/domain/models/violetta_app_locale.dart';
+import 'package:violetta_app/features/onboarding/presentation/widgets/violetta_locale_toggle_button.dart';
 import 'package:violetta_app/features/navigation/presentation/widgets/naver_map_hud_widget.dart';
 import 'package:violetta_app/features/translator/data/papago_scraping_service.dart';
 import 'package:violetta_app/features/translator/data/repositories/cached_translator_repository.dart';
@@ -73,6 +77,20 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
     _localSttService = LocalSttService();
     _localSttService.init();
     _ttsService = LocalTtsService();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) {
+        return;
+      }
+      final ViolettaLocaleController localeController =
+          ViolettaLocaleScope.of(context);
+      await _geminiService.applyLocale(localeController.locale);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _dialogText = _idleDialogText(context);
+      });
+    });
     _lipsyncController = ViolettaLipsyncController();
     _lipsyncController.attach(_ttsService);
     _gestureBindingController = ViolettaGestureBindingController(vsync: this);
@@ -462,11 +480,96 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
     return RegExp(r'[\uAC00-\uD7AF]').hasMatch(text);
   }
 
+  String _idleDialogTextFor(ViolettaAppLocale locale) {
+    return locale.isKorean
+        ? '비올레타가 대기 중입니다. 아래에 메시지를 입력하세요.'
+        : 'Виолетта на связи. Напиши сообщение ниже.';
+  }
+
+  String _idleDialogText(BuildContext context) {
+    try {
+      return _idleDialogTextFor(ViolettaLocaleScope.of(context).locale);
+    } catch (_) {
+      return 'Виолетта на связи. Напиши сообщение ниже.';
+    }
+  }
+
+  Future<void> _toggleLocaleFromUi() async {
+    final ViolettaLocaleController controller =
+        ViolettaLocaleScope.of(context);
+    await _ttsService.stop();
+    _speakingFallbackTimer?.cancel();
+    final ViolettaGeminiTurnResult turn = await _commandService.switchLocale(
+      controller.locale.toggled,
+      localeController: controller,
+      ttsService: _ttsService,
+    );
+    if (!mounted || !turn.localeSwitched || turn.switchedLocale == null) {
+      return;
+    }
+    await _geminiService.applyLocale(turn.switchedLocale!);
+    setState(() {
+      _dialogText = turn.confirmationSpeech;
+      _assistantState = AssistantState.sleeping;
+      _currentAvatarState = AvatarAnimationState.idle;
+      _spatialMarkers = <SpatialMarker>[];
+    });
+    _scheduleSpeakingFallback(turn.confirmationSpeech);
+  }
+
+  Future<void> _handleSystemUtilitySleeping(String confirmationSpeech) async {
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _dialogText = confirmationSpeech;
+      _assistantState = AssistantState.sleeping;
+      _currentAvatarState = AvatarAnimationState.idle;
+      _spatialMarkers = <SpatialMarker>[];
+    });
+    _scheduleSpeakingFallback(confirmationSpeech);
+  }
+
+  Future<void> _handleLocaleSwitchTurn(ViolettaGeminiTurnResult turn) async {
+    if (!mounted) {
+      return;
+    }
+    if (turn.switchedLocale != null) {
+      await _geminiService.applyLocale(turn.switchedLocale!);
+    }
+    setState(() {
+      _dialogText = turn.confirmationSpeech;
+      _assistantState = AssistantState.sleeping;
+      _currentAvatarState = AvatarAnimationState.idle;
+      _spatialMarkers = <SpatialMarker>[];
+    });
+    _scheduleSpeakingFallback(turn.confirmationSpeech);
+    debugPrint('[HUD] system_switch_locale="${turn.switchedLocale?.code}"');
+  }
+
+  String _resolveChatTtsLocale({String? messageHint}) {
+    try {
+      final ViolettaLocaleController controller =
+          ViolettaLocaleScope.of(context);
+      if (messageHint != null &&
+          _containsHangul(messageHint) &&
+          !controller.locale.isKorean) {
+        return ViolettaAppLocale.korean.ttsLocaleId;
+      }
+      return controller.ttsLocaleId;
+    } catch (_) {
+      return ViolettaAppLocale.russian.ttsLocaleId;
+    }
+  }
+
   Future<void> _sendMessage() async {
     final String message = _textController.text.trim();
     if (message.isEmpty) {
       return;
     }
+
+    final ViolettaLocaleController localeController =
+        ViolettaLocaleScope.of(context);
 
     await _ttsService.stop();
     _speakingFallbackTimer?.cancel();
@@ -475,6 +578,22 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
       final bool commandHandled = await _interceptChatModeVoiceCommand(message);
       if (commandHandled) {
         debugPrint('[HUD] hands_free_command="$message"');
+        return;
+      }
+
+      final ViolettaIncomingSttResult localUtility =
+          await _commandService.processIncomingSTT(
+        message,
+        localeController: localeController,
+        ttsService: _ttsService,
+      );
+      if (localUtility.handled) {
+        _textController.clear();
+        if (!mounted) {
+          return;
+        }
+        await _handleSystemUtilitySleeping(localUtility.confirmationSpeech);
+        debugPrint('[HUD] local_utility="$message"');
         return;
       }
     }
@@ -492,14 +611,32 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
       final String ttsLocaleId;
       if (_isChatMode) {
         final ViolettaGeminiTurnResult turn =
-            await _commandService.processGeminiStream(_geminiService, message);
-        if (turn.commandExecuted) {
+            await _commandService.processGeminiStream(
+          _geminiService,
+          message,
+          localeController: localeController,
+          ttsService: _ttsService,
+        );
+        if (turn.localeSwitched) {
+          await _geminiService.cancelActiveStream();
+          await _handleLocaleSwitchTurn(turn);
+          return;
+        }
+        if (turn.alarmSet) {
+          await _geminiService.cancelActiveStream();
+          await _handleSystemUtilitySleeping(turn.confirmationSpeech);
+          debugPrint(
+            '[HUD] system_set_alarm="${turn.alarmHour}:${turn.alarmMinute}"',
+          );
+          return;
+        }
+        if (turn.commandExecuted && turn.packageName != null) {
           await _geminiService.cancelActiveStream();
           if (!mounted) {
             return;
           }
           setState(() {
-            _dialogText = 'Виолетта на связи. Напиши сообщение ниже.';
+            _dialogText = _idleDialogTextFor(localeController.locale);
             _assistantState = AssistantState.sleeping;
             _currentAvatarState = AvatarAnimationState.idle;
             _spatialMarkers = <SpatialMarker>[];
@@ -512,11 +649,14 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
           if (!mounted) {
             return;
           }
-          final bool prefersKorean = _containsHangul(message);
+          final bool prefersKorean = _containsHangul(message) ||
+              _resolveChatTtsLocale() == ViolettaAppLocale.korean.ttsLocaleId;
           final String notInstalledText = prefersKorean
               ? '앱이 설치되어 있지 않습니다'
               : 'Приложение не установлено';
-          final String ttsLocale = prefersKorean ? 'ko-KR' : 'ru-RU';
+          final String ttsLocale = prefersKorean
+              ? ViolettaAppLocale.korean.ttsLocaleId
+              : ViolettaAppLocale.russian.ttsLocaleId;
           setState(() {
             _dialogText = notInstalledText;
             _assistantState = AssistantState.speaking;
@@ -529,7 +669,7 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
           return;
         }
         replyText = turn.displayText;
-        ttsLocaleId = 'ru-RU';
+        ttsLocaleId = _resolveChatTtsLocale(messageHint: message);
       } else {
         final bool latinOnly = _ocrService.isLatinOnly(message);
         final String source = latinOnly ? 'en' : 'ru';
@@ -615,6 +755,13 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
                     mediaQuery.padding.bottom,
               ),
               _buildDialogOverlay(neonCyan: neonCyan, neonPink: neonPink),
+              Positioned(
+                top: 72,
+                right: 16,
+                child: ViolettaLocaleToggleButton(
+                  onToggle: _toggleLocaleFromUi,
+                ),
+              ),
             ],
           ),
         ),
@@ -644,6 +791,13 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
                       ),
                       _buildCharacterView(
                         availableHeight: layout.topPanelHeight,
+                      ),
+                      Positioned(
+                        top: 8,
+                        right: 16,
+                        child: ViolettaLocaleToggleButton(
+                          onToggle: _toggleLocaleFromUi,
+                        ),
                       ),
                     ],
                   ),

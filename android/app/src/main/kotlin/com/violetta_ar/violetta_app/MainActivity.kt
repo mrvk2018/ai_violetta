@@ -1,6 +1,8 @@
 package com.violetta_ar.violetta_app
 
 import android.content.Intent
+import android.provider.AlarmClock
+import android.provider.Settings
 import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -36,6 +38,8 @@ class MainActivity : FlutterActivity() {
                 openInstalledApp(packageName, result)
             }
 
+            "createAlarm" -> createAlarm(call, result)
+
             else -> result.notImplemented()
         }
     }
@@ -43,7 +47,38 @@ class MainActivity : FlutterActivity() {
     private fun onNativeBridgeMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             "performSwipe" -> performAccessibilitySwipe(call, result)
+            "openAccessibilitySettings" -> openAccessibilitySettings(result)
+            "isAccessibilityServiceEnabled" -> {
+                result.success(ViolettaAccessibilityService.instance != null)
+            }
             else -> result.notImplemented()
+        }
+    }
+
+    private fun createAlarm(call: MethodCall, result: MethodChannel.Result) {
+        val hour = call.argument<Int>("hour")
+        val minutes = call.argument<Int>("minutes")
+        if (hour == null || minutes == null) {
+            result.error("INVALID_TIME", "Hour and minutes are required", null)
+            return
+        }
+
+        try {
+            val intent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
+                putExtra(AlarmClock.EXTRA_HOUR, hour)
+                putExtra(AlarmClock.EXTRA_MINUTES, minutes)
+                putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+            }
+            startActivity(intent)
+            Log.d(TAG, "createAlarm success hour=$hour minutes=$minutes")
+            result.success(true)
+        } catch (error: Exception) {
+            Log.e(TAG, "createAlarm failed hour=$hour minutes=$minutes", error)
+            result.error(
+                "CREATE_ALARM_FAILED",
+                error.message ?: "Failed to create alarm",
+                null,
+            )
         }
     }
 
@@ -105,5 +140,23 @@ class MainActivity : FlutterActivity() {
             "Accessibility Service не запущен. Включите его в настройках телефона.",
             null,
         )
+    }
+
+    private fun openAccessibilitySettings(result: MethodChannel.Result) {
+        try {
+            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+            Log.d(TAG, "Accessibility settings intent dispatched")
+            result.success(true)
+        } catch (error: Exception) {
+            Log.e(TAG, "Failed to open accessibility settings", error)
+            result.error(
+                "OPEN_SETTINGS_FAILED",
+                error.message ?: "Failed to open accessibility settings",
+                null,
+            )
+        }
     }
 }

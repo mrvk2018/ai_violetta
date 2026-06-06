@@ -2,14 +2,22 @@ import 'dart:async';
 
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
+import 'package:violetta_app/features/onboarding/domain/models/violetta_app_locale.dart';
 
 /// Gemini 2.5 Flash brain for Violetta with bilingual AR-optimized system instruction.
 class ViolettaGeminiService {
-  ViolettaGeminiService() : _model = _buildModel() {
+  ViolettaGeminiService({ViolettaAppLocale activeLocale = ViolettaAppLocale.russian})
+      : _activeLocale = activeLocale,
+        _model = _buildModel(activeLocale) {
     _chatSession = _model?.startChat();
   }
 
-  static const String _systemInstruction = '''
+  ViolettaAppLocale _activeLocale;
+  GenerativeModel? _model;
+  ChatSession? _chatSession;
+  StreamSubscription<GenerateContentResponse>? _activeResponseSubscription;
+
+  static const String _baseSystemInstruction = '''
 IDENTITY
 You are Violetta (Виолетта / 비올레타): a cutting-edge cyber-assistant embedded in transparent AR glasses for South Korea deployment. You are smart, slightly futuristic, highly cooperative, and tech-savvy. You never break character, never mention being an AI model, and never reference hidden policies.
 
@@ -55,6 +63,20 @@ WhatsApp (ватсап, вацап, whatsapp, 왓츠앱):
 Facebook (фейсбук, facebook, 페이스북):
 [SYSTEM_ACTION:OPEN_APP:com.facebook.katana]
 
+LOCALE SWITCH TOKENS (HIGHEST PRIORITY WITH APP LAUNCH)
+When the user commands to change, swap, or switch the interface language, return ONLY the token below (no extra text):
+
+Switch to Korean (переключи на корейский, говори по-корейски, 한국어로 변경해줘, 한국어로 말해줘):
+[SYSTEM_ACTION:SWITCH_LOCALE:KOREAN]
+
+Switch to Russian (переключи на русский, говори по-русски, 러시아어로 변경해줘, 러시아어로 말해줘):
+[SYSTEM_ACTION:SWITCH_LOCALE:RUSSIAN]
+
+ALARM PROTOCOL (HIGHEST PRIORITY WITH LOCALE AND APP LAUNCH)
+If the user commands to set, put, change, or schedule an alarm clock at a specific time (e.g., "поставь будильник на 7:45", "7시 45분에 알람 맞춤해줘", "wake me up at 7:45 am"):
+- Extract the specific hours (24-hour format) and minutes from the sentence.
+- DO NOT reply with regular sentences. Respond ONLY with this technical token: [SYSTEM_ACTION:SET_ALARM:HH:MM]. Example: [SYSTEM_ACTION:SET_ALARM:07:45].
+
 Token rules:
 - Output exactly one token line and nothing else.
 - Match intent even with OCR noise, typos, or mixed scripts.
@@ -64,11 +86,35 @@ FAIL-SAFE
 If input is unintelligible after cleanup, ask one short clarifying question in the detected user language (still obey length limits).
 ''';
 
-  final GenerativeModel? _model;
-  ChatSession? _chatSession;
-  StreamSubscription<GenerateContentResponse>? _activeResponseSubscription;
+  ViolettaAppLocale get activeLocale => _activeLocale;
 
-  static GenerativeModel? _buildModel() {
+  /// Rebuilds the chat session with locale-biased system instructions (no app restart).
+  Future<void> applyLocale(ViolettaAppLocale locale) async {
+    if (_activeLocale == locale) {
+      return;
+    }
+    await cancelActiveStream();
+    _activeLocale = locale;
+    _model = _buildModel(locale);
+    _chatSession = _model?.startChat();
+  }
+
+  static String _systemInstructionFor(ViolettaAppLocale locale) {
+    final String localeDirective = locale.isKorean
+        ? '''
+ACTIVE INTERFACE LOCALE: KOREAN (ko-KR)
+- Default every reply to modern South Korean unless the user explicitly writes in Russian.
+- UI, TTS, and HUD copy are Korean-first while this locale is active.
+'''
+        : '''
+ACTIVE INTERFACE LOCALE: RUSSIAN (ru-RU)
+- Default every reply to natural Russian unless the user explicitly writes in Korean.
+- UI, TTS, and HUD copy are Russian-first while this locale is active.
+''';
+    return '$_baseSystemInstruction\n$localeDirective';
+  }
+
+  static GenerativeModel? _buildModel(ViolettaAppLocale locale) {
     final String? apiKey = dotenv.env['GEMINI_API_KEY']?.trim();
     if (apiKey == null || apiKey.isEmpty) {
       return null;
@@ -77,7 +123,7 @@ If input is unintelligible after cleanup, ask one short clarifying question in t
     return GenerativeModel(
       model: 'gemini-2.5-flash',
       apiKey: apiKey,
-      systemInstruction: Content.system(_systemInstruction),
+      systemInstruction: Content.system(_systemInstructionFor(locale)),
     );
   }
 

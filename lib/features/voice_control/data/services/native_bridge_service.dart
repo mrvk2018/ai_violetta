@@ -36,4 +36,23 @@ class NativeBridgeService {
       return false;
     }
   }
+
+  static Future<void> openAccessibilitySettings() async {
+    try {
+      await _platform.invokeMethod<void>('openAccessibilitySettings');
+    } on PlatformException catch (e) {
+      print('Ошибка открытия настроек доступности: ${e.message}');
+    }
+  }
+
+  static Future<bool> isAccessibilityServiceEnabled() async {
+    try {
+      final bool? enabled = await _platform.invokeMethod<bool>(
+        'isAccessibilityServiceEnabled',
+      );
+      return enabled ?? false;
+    } on PlatformException catch (_) {
+      return false;
+    }
+  }
 }
