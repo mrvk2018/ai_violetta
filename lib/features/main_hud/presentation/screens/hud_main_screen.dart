@@ -12,7 +12,8 @@ import 'package:violetta_app/features/ar_avatar/domain/avatar_state.dart';
 import 'package:violetta_app/features/avatar/application/violetta_gesture_binding_controller.dart';
 import 'package:violetta_app/features/avatar/application/violetta_lipsync_controller.dart';
 import 'package:violetta_app/features/avatar/presentation/widgets/violetta_3d_view.dart';
-import 'package:violetta_app/features/assistant/data/gemini_service.dart';
+import 'package:violetta_app/features/ai_brain/services/violetta_command_service.dart';
+import 'package:violetta_app/features/ai_brain/services/violetta_gemini_service.dart';
 import 'package:violetta_app/features/assistant/domain/assistant_state.dart';
 import 'package:violetta_app/features/main_hud/domain/models/spatial_marker.dart';
 import 'package:violetta_app/features/navigation/presentation/widgets/naver_map_hud_widget.dart';
@@ -43,6 +44,7 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
   late final ViolettaLipsyncController _lipsyncController;
   late final ViolettaGestureBindingController _gestureBindingController;
   late final ViolettaGeminiService _geminiService;
+  late final ViolettaCommandService _commandService;
   late final LocalOcrService _ocrService;
   final AirGestureService _airGestureService = AirGestureService();
   final TextEditingController _textController = TextEditingController();
@@ -66,6 +68,7 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
   void initState() {
     super.initState();
     _geminiService = ViolettaGeminiService();
+    _commandService = ViolettaCommandService();
     _translatorRepository = CachedTranslatorRepository(PapagoScrapingService());
     _localSttService = LocalSttService();
     _localSttService.init();
@@ -184,25 +187,32 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
     }
     final signal = _airGestureService.processFrame(image);
     if (signal.airSwipeUp) {
-      _handleAirSwipeDetected();
+      _handleAirSwipeDetected(swipeUp: true);
+    } else if (signal.airSwipeDown) {
+      _handleAirSwipeDetected(swipeUp: false);
     }
   }
 
-  void _handleAirSwipeDetected() {
+  void _handleAirSwipeDetected({required bool swipeUp}) {
     if (!mounted) {
       return;
     }
     setState(() {
-      _dialogText = '[ЖЕСТ]: Air Swipe вверх!';
+      _dialogText = swipeUp
+          ? '[ЖЕСТ]: Air Swipe вверх!'
+          : '[ЖЕСТ]: Air Swipe вниз!';
       _currentAvatarState = AvatarAnimationState.loading;
     });
-    NativeBridgeService.performSystemSwipe();
+    NativeBridgeService.performSystemSwipe(swipeUp: swipeUp);
     Future<void>.delayed(const Duration(seconds: 1), () {
       if (!mounted) {
         return;
       }
+      final String expectedDialog = swipeUp
+          ? '[ЖЕСТ]: Air Swipe вверх!'
+          : '[ЖЕСТ]: Air Swipe вниз!';
       if (_currentAvatarState == AvatarAnimationState.loading &&
-          _dialogText == '[ЖЕСТ]: Air Swipe вверх!') {
+          _dialogText == expectedDialog) {
         setState(() {
           _currentAvatarState = AvatarAnimationState.idle;
         });
@@ -354,7 +364,8 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
     _speakingFallbackTimer?.cancel();
     setState(() {
       _currentAvatarState = AvatarAnimationState.idle;
-      if (_assistantState == AssistantState.speaking) {
+      if (_assistantState == AssistantState.speaking ||
+          _assistantState == AssistantState.sleeping) {
         _assistantState = AssistantState.idle;
       }
     });
@@ -430,27 +441,6 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
   Future<bool> _interceptChatModeVoiceCommand(String rawMessage) async {
     final String lowerMessage = rawMessage.toLowerCase();
 
-    if (lowerMessage.contains('открой тикток') ||
-        lowerMessage.contains('open tiktok') ||
-        lowerMessage.contains('включи тикток')) {
-      await _ttsService.stop();
-      _speakingFallbackTimer?.cancel();
-      if (!mounted) {
-        return true;
-      }
-      setState(() {
-        _textController.clear();
-        _spatialMarkers = <SpatialMarker>[];
-        _dialogText = '[СИСТЕМА]: Запуск TikTok...';
-        _assistantState = AssistantState.speaking;
-        _currentAvatarState = AvatarAnimationState.speaking;
-      });
-      await _ttsService.speak('Открываю Тикток', 'ru-RU');
-      _scheduleSpeakingFallback('Открываю Тикток');
-      await NativeBridgeService.openApp('com.zhiliaoapp.musically');
-      return true;
-    }
-
     if (lowerMessage.contains('дальше') ||
         lowerMessage.contains('пролистай') ||
         lowerMessage.contains('следующий') ||
@@ -465,27 +455,11 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
       return true;
     }
 
-    if (lowerMessage.contains('открой ютуб') ||
-        lowerMessage.contains('open youtube') ||
-        lowerMessage.contains('включи ютуб')) {
-      await _ttsService.stop();
-      _speakingFallbackTimer?.cancel();
-      if (!mounted) {
-        return true;
-      }
-      setState(() {
-        _textController.clear();
-        _dialogText = '[СИСТЕМА]: Запуск YouTube...';
-        _assistantState = AssistantState.speaking;
-        _currentAvatarState = AvatarAnimationState.speaking;
-      });
-      await _ttsService.speak('Запускаю Ютуб', 'ru-RU');
-      _scheduleSpeakingFallback('Запускаю Ютуб');
-      await NativeBridgeService.openApp('com.google.android.youtube');
-      return true;
-    }
-
     return false;
+  }
+
+  bool _containsHangul(String text) {
+    return RegExp(r'[\uAC00-\uD7AF]').hasMatch(text);
   }
 
   Future<void> _sendMessage() async {
@@ -514,10 +488,47 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
     debugPrint('[HUD] user_message="$message"');
 
     try {
-      final String replyText;
+      String replyText;
       final String ttsLocaleId;
       if (_isChatMode) {
-        replyText = await _geminiService.sendMessage(message);
+        final ViolettaGeminiTurnResult turn =
+            await _commandService.processGeminiStream(_geminiService, message);
+        if (turn.commandExecuted) {
+          await _geminiService.cancelActiveStream();
+          if (!mounted) {
+            return;
+          }
+          setState(() {
+            _dialogText = 'Виолетта на связи. Напиши сообщение ниже.';
+            _assistantState = AssistantState.sleeping;
+            _currentAvatarState = AvatarAnimationState.idle;
+            _spatialMarkers = <SpatialMarker>[];
+          });
+          debugPrint('[HUD] system_open_app="${turn.packageName}"');
+          return;
+        }
+        if (turn.appNotInstalled) {
+          await _geminiService.cancelActiveStream();
+          if (!mounted) {
+            return;
+          }
+          final bool prefersKorean = _containsHangul(message);
+          final String notInstalledText = prefersKorean
+              ? '앱이 설치되어 있지 않습니다'
+              : 'Приложение не установлено';
+          final String ttsLocale = prefersKorean ? 'ko-KR' : 'ru-RU';
+          setState(() {
+            _dialogText = notInstalledText;
+            _assistantState = AssistantState.speaking;
+            _currentAvatarState = AvatarAnimationState.speaking;
+            _spatialMarkers = <SpatialMarker>[];
+          });
+          await _ttsService.speak(notInstalledText, ttsLocale);
+          _scheduleSpeakingFallback(notInstalledText);
+          debugPrint('[HUD] system_open_app_missing="${turn.packageName}"');
+          return;
+        }
+        replyText = turn.displayText;
         ttsLocaleId = 'ru-RU';
       } else {
         final bool latinOnly = _ocrService.isLatinOnly(message);
@@ -530,6 +541,20 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
         );
         ttsLocaleId = latinOnly ? 'ru-RU' : 'ko-KR';
       }
+
+      if (replyText.isEmpty) {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _dialogText =
+              'Я на связи, но ответ не успел дойти. Давай попробуем еще раз?';
+          _assistantState = AssistantState.idle;
+          _currentAvatarState = AvatarAnimationState.idle;
+        });
+        return;
+      }
+
       if (!mounted) {
         return;
       }
@@ -903,7 +928,8 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
               }
               setState(() {
                 _currentAvatarState = AvatarAnimationState.idle;
-                if (_assistantState == AssistantState.speaking) {
+                if (_assistantState == AssistantState.speaking ||
+                    _assistantState == AssistantState.sleeping) {
                   _assistantState = AssistantState.idle;
                 }
               });

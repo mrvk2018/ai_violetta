@@ -4,22 +4,36 @@ class NativeBridgeService {
   static const MethodChannel _platform = MethodChannel(
     'package:violetta_app/native_bridge',
   );
+  static const MethodChannel _systemControl = MethodChannel(
+    'com.violetta.ar/system_control',
+  );
 
-  static Future<void> openApp(String packageName) async {
+  static Future<bool> openApp(String packageName) async {
     try {
-      await _platform.invokeMethod('openApp', <String, String>{
-        'packageName': packageName,
-      });
-    } on PlatformException catch (e) {
-      print('Ошибка открытия приложения: ${e.message}');
+      final bool? launched = await _systemControl.invokeMethod<bool>(
+        'openApp',
+        <String, String>{'package': packageName},
+      );
+      return launched ?? true;
+    } on PlatformException catch (error) {
+      if (error.code == 'NOT_INSTALLED') {
+        return false;
+      }
+      print('Ошибка открытия приложения: ${error.message}');
+      return false;
     }
   }
 
-  static Future<void> performSystemSwipe() async {
+  static Future<bool> performSystemSwipe({bool swipeUp = true}) async {
     try {
-      await _platform.invokeMethod('performSwipe');
+      final bool? dispatched = await _platform.invokeMethod<bool>(
+        'performSwipe',
+        <String, bool>{'swipeUp': swipeUp},
+      );
+      return dispatched ?? true;
     } on PlatformException catch (e) {
       print('Ошибка выполнения свайпа: ${e.message}');
+      return false;
     }
   }
 }

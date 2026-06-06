@@ -94,6 +94,7 @@ class AirGestureService {
     double leftArmAngle = 0.0;
     double rightArmAngle = 0.0;
     bool airSwipeUp = false;
+    bool airSwipeDown = false;
 
     if (_previousUpperLuminance > 0 && _previousLowerLuminance > 0) {
       final double upperDelta = upperAvg - _previousUpperLuminance;
@@ -107,17 +108,22 @@ class AirGestureService {
       final DateTime now = DateTime.now();
       final double globalDelta = (globalAvg - _previousLuminance).abs();
       final double upperDelta = upperAvg - _previousUpperLuminance;
+      final double lowerDelta = lowerAvg - _previousLowerLuminance;
       final bool cooldownElapsed =
           now.difference(_lastGestureTime).inMilliseconds >= 1000;
 
-      if (cooldownElapsed &&
-          globalDelta > 35.0 &&
-          upperDelta > 15.0 &&
-          upperDelta > (lowerAvg - _previousLowerLuminance)) {
-        airSwipeUp = true;
-        leftArmAngle = 0.5;
-        rightArmAngle = 0.5;
-        _lastGestureTime = now;
+      if (cooldownElapsed && globalDelta > 35.0) {
+        if (upperDelta > 15.0 && upperDelta > lowerDelta) {
+          airSwipeUp = true;
+          leftArmAngle = 0.5;
+          rightArmAngle = 0.5;
+          _lastGestureTime = now;
+        } else if (lowerDelta > 15.0 && lowerDelta > upperDelta) {
+          airSwipeDown = true;
+          leftArmAngle = -0.35;
+          rightArmAngle = -0.35;
+          _lastGestureTime = now;
+        }
       }
     }
 
@@ -131,6 +137,7 @@ class AirGestureService {
       leftArmAngle: leftArmAngle,
       rightArmAngle: rightArmAngle,
       airSwipeUp: airSwipeUp,
+      airSwipeDown: airSwipeDown,
     );
   }
 

@@ -5,6 +5,7 @@ class AirGestureSignal {
   final double leftArmAngle;
   final double rightArmAngle;
   final bool airSwipeUp;
+  final bool airSwipeDown;
 
   const AirGestureSignal({
     this.lookAtX = 0.0,
@@ -12,5 +13,6 @@ class AirGestureSignal {
     this.leftArmAngle = 0.0,
     this.rightArmAngle = 0.0,
     this.airSwipeUp = false,
+    this.airSwipeDown = false,
   });
 }
