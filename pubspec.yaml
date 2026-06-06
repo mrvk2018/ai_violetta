@@ -76,6 +76,9 @@ flutter:
   assets:
     - .env
     - assets/models/violetta_beanie.glb
+    - assets/avatar/violetta_body.png
+    - assets/avatar/left_arm.png
+    - assets/avatar/right_arm.png
 
   # To add assets to your application, add an assets section, like this:
   # assets:

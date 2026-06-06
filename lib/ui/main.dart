@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_naver_map/flutter_naver_map.dart';
+import 'package:violetta_app/features/avatar/presentation/screens/violetta_debug_screen.dart';
 import 'package:violetta_app/features/main_hud/presentation/screens/hud_main_screen.dart';
 
 Future<void> main() async {
@@ -45,6 +46,9 @@ class MyApp extends StatelessWidget {
         colorScheme: .fromSeed(seedColor: Colors.deepPurple),
       ),
       home: const HudMainScreen(),
+      routes: <String, WidgetBuilder>{
+        if (kDebugMode) '/avatar-debug': (_) => const ViolettaDebugScreen(),
+      },
     );
   }
 }

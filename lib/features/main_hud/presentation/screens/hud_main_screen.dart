@@ -9,7 +9,9 @@ import 'package:flutter/material.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:violetta_app/core/presentation/layout/responsive_layout_info.dart';
 import 'package:violetta_app/features/ar_avatar/domain/avatar_state.dart';
-import 'package:violetta_app/features/ar_avatar/presentation/widgets/violetta_3d_view.dart';
+import 'package:violetta_app/features/avatar/application/violetta_gesture_binding_controller.dart';
+import 'package:violetta_app/features/avatar/application/violetta_lipsync_controller.dart';
+import 'package:violetta_app/features/avatar/presentation/widgets/violetta_3d_view.dart';
 import 'package:violetta_app/features/assistant/data/gemini_service.dart';
 import 'package:violetta_app/features/assistant/domain/assistant_state.dart';
 import 'package:violetta_app/features/main_hud/domain/models/spatial_marker.dart';
@@ -29,7 +31,7 @@ class HudMainScreen extends StatefulWidget {
   State<HudMainScreen> createState() => _HudMainScreenState();
 }
 
-class _HudMainScreenState extends State<HudMainScreen> {
+class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateMixin {
   static const bool _papagoSmokeTestEnabled = bool.fromEnvironment(
     'PAPAGO_SMOKE_TEST',
     defaultValue: false,
@@ -38,6 +40,8 @@ class _HudMainScreenState extends State<HudMainScreen> {
   late final CachedTranslatorRepository _translatorRepository;
   late final LocalSttService _localSttService;
   late final LocalTtsService _ttsService;
+  late final ViolettaLipsyncController _lipsyncController;
+  late final ViolettaGestureBindingController _gestureBindingController;
   late final ViolettaGeminiService _geminiService;
   late final LocalOcrService _ocrService;
   final AirGestureService _airGestureService = AirGestureService();
@@ -66,6 +70,10 @@ class _HudMainScreenState extends State<HudMainScreen> {
     _localSttService = LocalSttService();
     _localSttService.init();
     _ttsService = LocalTtsService();
+    _lipsyncController = ViolettaLipsyncController();
+    _lipsyncController.attach(_ttsService);
+    _gestureBindingController = ViolettaGestureBindingController(vsync: this);
+    _gestureBindingController.attach(_airGestureService);
     _ttsService.setCompletionHandler(_onSpeechCompleted);
     _ttsService.init();
     _ocrService = LocalOcrService();
@@ -174,7 +182,8 @@ class _HudMainScreenState extends State<HudMainScreen> {
     if (!_isChatMode) {
       return;
     }
-    if (_airGestureService.detectAirSwipe(image)) {
+    final signal = _airGestureService.processFrame(image);
+    if (signal.airSwipeUp) {
       _handleAirSwipeDetected();
     }
   }
@@ -220,6 +229,9 @@ class _HudMainScreenState extends State<HudMainScreen> {
     _markerPulseTimer?.cancel();
     _localSttService.stopListening();
     _ttsService.stop();
+    _lipsyncController.dispose();
+    _gestureBindingController.dispose();
+    _airGestureService.dispose();
     _ocrService.dispose();
     _stopGestureStream();
     _cameraController?.dispose();
@@ -667,6 +679,16 @@ class _HudMainScreenState extends State<HudMainScreen> {
             if (kDebugMode) ...[
               const SizedBox(width: 8),
               _buildFormFactorDebugBadge(formFactor: formFactor),
+              IconButton(
+                tooltip: 'Avatar 2.5D Debug HUD',
+                iconSize: 20,
+                splashRadius: 18,
+                color: neonPink,
+                onPressed: () {
+                  Navigator.of(context).pushNamed('/avatar-debug');
+                },
+                icon: const Icon(Icons.bug_report_rounded),
+              ),
             ],
           ],
         ),
@@ -706,7 +728,10 @@ class _HudMainScreenState extends State<HudMainScreen> {
       child: SizedBox(
         width: avatarSize,
         height: avatarSize,
-        child: Violetta3DView(currentState: _currentAvatarState),
+        child: Violetta3DView(
+          lipsyncController: _lipsyncController,
+          gestureController: _gestureBindingController,
+        ),
       ),
     );
   }
