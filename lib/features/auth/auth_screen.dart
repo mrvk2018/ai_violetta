@@ -4,10 +4,14 @@ import 'package:flutter/material.dart';
 import 'auth_service.dart';
 
 class AuthScreen extends StatefulWidget {
-  AuthScreen({super.key, AuthService? authService})
-      : _authService = authService ?? AuthService();
+  AuthScreen({
+    super.key,
+    AuthService? authService,
+    this.onSignedIn,
+  }) : _authService = authService ?? AuthService.instance;
 
   final AuthService _authService;
+  final VoidCallback? onSignedIn;
 
   @override
   State<AuthScreen> createState() => _AuthScreenState();
@@ -24,7 +28,21 @@ class _AuthScreenState extends State<AuthScreen> {
     });
 
     try {
-      await widget._authService.signInWithGoogle();
+      final AuthSignInResult result =
+          await widget._authService.signInWithGoogle();
+      if (!mounted) {
+        return;
+      }
+      if (result.cancelled) {
+        return;
+      }
+      if (result.success) {
+        widget.onSignedIn?.call();
+        return;
+      }
+      setState(() {
+        _errorMessage = 'Не удалось войти. Проверьте сеть и повторите попытку.';
+      });
     } on FirebaseAuthException catch (error) {
       setState(() {
         _errorMessage = error.message ?? 'Ошибка авторизации. Попробуйте снова.';
@@ -47,6 +65,7 @@ class _AuthScreenState extends State<AuthScreen> {
     final ThemeData theme = Theme.of(context);
 
     return Scaffold(
+      backgroundColor: const Color(0xFF141920),
       body: SafeArea(
         child: Center(
           child: Padding(
@@ -54,6 +73,22 @@ class _AuthScreenState extends State<AuthScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                Text(
+                  'Violetta AI',
+                  style: theme.textTheme.headlineMedium?.copyWith(
+                    color: const Color(0xFF00F5FF),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Войдите через Google — ваши личные квоты ИИ подключатся автоматически.',
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: Colors.white70,
+                  ),
+                ),
+                const SizedBox(height: 32),
                 AnimatedSwitcher(
                   duration: const Duration(milliseconds: 180),
                   child: _isLoading
@@ -61,7 +96,10 @@ class _AuthScreenState extends State<AuthScreen> {
                           key: ValueKey('loader'),
                           width: 48,
                           height: 48,
-                          child: CircularProgressIndicator(strokeWidth: 3),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 3,
+                            color: Color(0xFF00F5FF),
+                          ),
                         )
                       : SizedBox(
                           key: const ValueKey('button'),
@@ -83,8 +121,8 @@ class _AuthScreenState extends State<AuthScreen> {
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(16),
                               ),
-                              backgroundColor: theme.colorScheme.primary,
-                              foregroundColor: theme.colorScheme.onPrimary,
+                              backgroundColor: const Color(0xFF00F5FF),
+                              foregroundColor: const Color(0xFF141920),
                               elevation: 1,
                             ),
                           ),

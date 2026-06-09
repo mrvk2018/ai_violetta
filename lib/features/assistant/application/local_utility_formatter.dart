@@ -4,30 +4,17 @@ import 'package:violetta_app/features/onboarding/domain/models/violetta_app_loca
 class LocalUtilityFormatter {
   LocalUtilityFormatter._();
 
-  static const List<String> timeKeywords = <String>[
-    'который час',
-    'сколько время',
-    '지금 몇시',
-    '몇 시',
-    'время',
-    '시간',
-  ];
-
-  static const List<String> dateKeywords = <String>[
-    'какая дата',
-    'какой сегодня день',
-    '몇 월',
-    '몇 일',
-    'число',
-    'дата',
-    '날짜',
-  ];
-
   static const Set<String> exactTimePhrases = <String>{
     'который час?',
     'который час',
     'сколько время?',
     'сколько время',
+    'сколько сейчас времени',
+    'сколько сейчас времени?',
+    '지금 몇시',
+    '지금 몇시?',
+    '몇 시',
+    '몇 시?',
   };
 
   static const Set<String> exactDatePhrases = <String>{
@@ -35,22 +22,22 @@ class LocalUtilityFormatter {
     'какая дата',
     'какой сегодня день?',
     'какой сегодня день',
+    'какое сегодня число',
+    'какое сегодня число?',
+    '몇 월',
+    '몇 월?',
+    '몇 일',
+    '몇 일?',
+    '날짜',
+    '날짜?',
   };
 
   static bool matchesExactTimeQuery(String normalizedText) {
-    final String trimmed = normalizedText.trim();
-    if (exactTimePhrases.contains(trimmed)) {
-      return true;
-    }
-    return matchesTimeQuery(normalizedText);
+    return exactTimePhrases.contains(normalizedText.trim());
   }
 
   static bool matchesExactDateQuery(String normalizedText) {
-    final String trimmed = normalizedText.trim();
-    if (exactDatePhrases.contains(trimmed)) {
-      return true;
-    }
-    return matchesDateQuery(normalizedText);
+    return exactDatePhrases.contains(normalizedText.trim());
   }
 
   static const List<String> _ruWeekdays = <String>[
@@ -122,14 +109,6 @@ class LocalUtilityFormatter {
     31: 'тридцать первое',
   };
 
-  static bool matchesDateQuery(String normalizedText) {
-    return _matchesKeyword(normalizedText, dateKeywords);
-  }
-
-  static bool matchesTimeQuery(String normalizedText) {
-    return _matchesKeyword(normalizedText, timeKeywords);
-  }
-
   static String formatTime(DateTime now, ViolettaAppLocale locale) {
     if (locale.isKorean) {
       final String dayPeriod = now.hour < 12 ? '오전' : '오후';
@@ -170,15 +149,6 @@ class LocalUtilityFormatter {
     final String paddedHour = hour.toString().padLeft(2, '0');
     final String paddedMinute = minute.toString().padLeft(2, '0');
     return 'Будильник установлен на $paddedHour:$paddedMinute';
-  }
-
-  static bool _matchesKeyword(String normalizedText, List<String> keywords) {
-    for (final String keyword in keywords) {
-      if (normalizedText.contains(keyword)) {
-        return true;
-      }
-    }
-    return false;
   }
 
   static String _ruHours(int hour) {

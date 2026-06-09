@@ -6,12 +6,19 @@ import 'dart:math';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 import 'package:violetta_app/core/presentation/layout/responsive_layout_info.dart';
 import 'package:violetta_app/features/ar_avatar/domain/avatar_state.dart';
+import 'package:violetta_app/features/avatar/application/hand_state_machine_controller.dart';
 import 'package:violetta_app/features/avatar/application/violetta_gesture_binding_controller.dart';
 import 'package:violetta_app/features/avatar/application/violetta_lipsync_controller.dart';
-import 'package:violetta_app/features/avatar/presentation/widgets/violetta_3d_view.dart';
+import 'package:violetta_app/models/message_model.dart';
+import 'package:violetta_app/repositories/chat_repository.dart';
+import 'package:violetta_app/services/audio_processor_service.dart';
+import 'package:violetta_app/services/eleven_labs_service.dart';
+import 'package:violetta_app/ui/widgets/violetta_view.dart';
 import 'package:violetta_app/features/assistant/application/violetta_command_service.dart';
 import 'package:violetta_app/features/ai_brain/services/violetta_gemini_service.dart';
 import 'package:violetta_app/features/assistant/domain/assistant_state.dart';
@@ -27,6 +34,7 @@ import 'package:violetta_app/features/gestures/data/services/air_gesture_service
 import 'package:violetta_app/features/vision/data/services/local_ocr_service.dart';
 import 'package:violetta_app/features/voice_control/data/services/native_bridge_service.dart';
 import 'package:violetta_app/features/voice_control/data/services/local_stt_service.dart';
+import 'package:violetta_app/features/auth/presentation/byok_keys_panel.dart';
 import 'package:violetta_app/features/voice_output/data/services/local_tts_service.dart';
 
 class HudMainScreen extends StatefulWidget {
@@ -41,6 +49,9 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
     'PAPAGO_SMOKE_TEST',
     defaultValue: false,
   );
+  static const String _userSenderId = 'user';
+  static const String _violettaSenderId = 'violetta';
+  static const String _defaultElevenLabsVoiceId = 'EXAVITQu4vr4xnSDxMaL';
 
   late final CachedTranslatorRepository _translatorRepository;
   late final LocalSttService _localSttService;
@@ -50,8 +61,13 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
   late final ViolettaGeminiService _geminiService;
   late final ViolettaCommandService _commandService;
   late final LocalOcrService _ocrService;
+  late final ChatRepository _chatRepository;
+  late final HandStateMachineController _handController;
+  late final ElevenLabsService _elevenLabsService;
+  late final AudioProcessorService _audioProcessorService;
   final AirGestureService _airGestureService = AirGestureService();
   final TextEditingController _textController = TextEditingController();
+  final ScrollController _chatScrollController = ScrollController();
   CameraController? _cameraController;
   CameraController? _frontCameraController;
   bool _isGestureStreamActive = false;
@@ -61,22 +77,27 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
 
   AssistantState _assistantState = AssistantState.idle;
   AvatarAnimationState _currentAvatarState = AvatarAnimationState.idle;
-  bool _isChatMode = false;
+  bool _isChatMode = true;
   bool _isListening = false;
   bool _isOcrScanning = false;
   bool _isMarkerPulseExpanded = false;
   List<SpatialMarker> _spatialMarkers = <SpatialMarker>[];
-  String _dialogText = 'Виолетта на связи. Напиши сообщение ниже.';
+  List<MessageModel> _messages = <MessageModel>[];
 
   @override
   void initState() {
     super.initState();
     _geminiService = ViolettaGeminiService();
     _commandService = ViolettaCommandService();
+    _chatRepository = ChatRepository(Hive.box<MessageModel>('messages_box'));
+    _handController = HandStateMachineController();
+    _elevenLabsService = ElevenLabsService();
+    _audioProcessorService = AudioProcessorService();
     _translatorRepository = CachedTranslatorRepository(PapagoScrapingService());
     _localSttService = LocalSttService();
     _localSttService.init();
     _ttsService = LocalTtsService();
+    unawaited(_audioProcessorService.init());
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) {
         return;
@@ -84,12 +105,7 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
       final ViolettaLocaleController localeController =
           ViolettaLocaleScope.of(context);
       await _geminiService.applyLocale(localeController.locale);
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _dialogText = _idleDialogText(context);
-      });
+      await _bootstrapChatHistory(localeController);
     });
     _lipsyncController = ViolettaLipsyncController();
     _lipsyncController.attach(_ttsService);
@@ -216,9 +232,6 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
       return;
     }
     setState(() {
-      _dialogText = swipeUp
-          ? '[ЖЕСТ]: Air Swipe вверх!'
-          : '[ЖЕСТ]: Air Swipe вниз!';
       _currentAvatarState = AvatarAnimationState.loading;
     });
     NativeBridgeService.performSystemSwipe(swipeUp: swipeUp);
@@ -226,11 +239,7 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
       if (!mounted) {
         return;
       }
-      final String expectedDialog = swipeUp
-          ? '[ЖЕСТ]: Air Swipe вверх!'
-          : '[ЖЕСТ]: Air Swipe вниз!';
-      if (_currentAvatarState == AvatarAnimationState.loading &&
-          _dialogText == expectedDialog) {
+      if (_currentAvatarState == AvatarAnimationState.loading) {
         setState(() {
           _currentAvatarState = AvatarAnimationState.idle;
         });
@@ -259,6 +268,9 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
     _ttsService.stop();
     _lipsyncController.dispose();
     _gestureBindingController.dispose();
+    _handController.dispose();
+    _chatScrollController.dispose();
+    unawaited(_audioProcessorService.dispose());
     _airGestureService.dispose();
     _ocrService.dispose();
     _stopGestureStream();
@@ -293,11 +305,17 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
       }
 
       if (text.isEmpty) {
+        final ViolettaLocaleController localeController =
+            ViolettaLocaleScope.of(context);
         setState(() {
-          _dialogText = '[OCR]: Текст на кадре не обнаружен.';
           _assistantState = AssistantState.idle;
           _currentAvatarState = AvatarAnimationState.idle;
         });
+        await _appendAssistantMessage(
+          '[OCR]: Текст на кадре не обнаружен.',
+          localeController: localeController,
+          playVoice: false,
+        );
         return;
       }
 
@@ -315,24 +333,34 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
         return;
       }
 
+      final ViolettaLocaleController localeController =
+          ViolettaLocaleScope.of(context);
       setState(() {
-        _dialogText = translated;
         _assistantState = AssistantState.speaking;
         _currentAvatarState = AvatarAnimationState.speaking;
         _spatialMarkers = _generateSpatialMarkers();
       });
-      await _ttsService.speak(translated, 'ru-RU');
-      _scheduleSpeakingFallback(translated);
+      await _appendAssistantMessage(
+        translated,
+        localeController: localeController,
+        useElevenLabs: false,
+      );
     } catch (error) {
       if (!mounted) {
         return;
       }
       debugPrint('[HUD] ocr_scan_error="$error"');
+      final ViolettaLocaleController localeController =
+          ViolettaLocaleScope.of(context);
       setState(() {
-        _dialogText = '[OCR]: Не удалось отсканировать текст. Повтори попытку.';
         _assistantState = AssistantState.error;
         _currentAvatarState = AvatarAnimationState.idle;
       });
+      await _appendAssistantMessage(
+        '[OCR]: Не удалось отсканировать текст. Повтори попытку.',
+        localeController: localeController,
+        playVoice: false,
+      );
     } finally {
       if (mounted) {
         setState(() {
@@ -380,6 +408,7 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
       return;
     }
     _speakingFallbackTimer?.cancel();
+    _handController.setHandDown();
     setState(() {
       _currentAvatarState = AvatarAnimationState.idle;
       if (_assistantState == AssistantState.speaking ||
@@ -486,11 +515,186 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
         : 'Виолетта на связи. Напиши сообщение ниже.';
   }
 
-  String _idleDialogText(BuildContext context) {
+  String get _elevenLabsVoiceId =>
+      dotenv.env['ELEVEN_LABS_VOICE_ID']?.trim() ?? _defaultElevenLabsVoiceId;
+
+  Future<void> _bootstrapChatHistory(
+    ViolettaLocaleController localeController,
+  ) async {
+    final List<MessageModel> stored = _chatRepository.getAllMessages();
+    if (stored.isEmpty) {
+      await _appendAssistantMessage(
+        _idleDialogTextFor(localeController.locale),
+        localeController: localeController,
+        playVoice: false,
+        raiseHand: false,
+      );
+      return;
+    }
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _messages = stored;
+    });
+    _scrollChatToBottom();
+  }
+
+  void _reloadMessages() {
+    setState(() {
+      _messages = _chatRepository.getAllMessages();
+    });
+    _scrollChatToBottom();
+  }
+
+  void _scrollChatToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_chatScrollController.hasClients) {
+        return;
+      }
+      _chatScrollController.animateTo(
+        _chatScrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      );
+    });
+  }
+
+  String _languageCodeForText(String text, ViolettaAppLocale locale) {
+    if (_containsHangul(text)) {
+      return 'ko';
+    }
+    return locale.isKorean ? 'ko' : 'ru';
+  }
+
+  Future<void> _persistUserMessage(
+    String text,
+    ViolettaLocaleController localeController,
+  ) async {
+    final MessageModel message = MessageModel(
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      senderId: _userSenderId,
+      originalText: text,
+      sourceLanguageCode: _languageCodeForText(text, localeController.locale),
+      translations: <String, String>{},
+      timestamp: DateTime.now(),
+      isAudio: _isListening,
+    );
+    await _chatRepository.saveMessage(message);
+    _reloadMessages();
+  }
+
+  Future<void> _appendAssistantMessage(
+    String text, {
+    required ViolettaLocaleController localeController,
+    bool playVoice = true,
+    bool raiseHand = true,
+    bool useElevenLabs = true,
+  }) async {
+    if (text.trim().isEmpty) {
+      return;
+    }
+
+    final MessageModel message = MessageModel(
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      senderId: _violettaSenderId,
+      originalText: text,
+      sourceLanguageCode: _languageCodeForText(text, localeController.locale),
+      translations: <String, String>{},
+      timestamp: DateTime.now(),
+      isAudio: useElevenLabs && playVoice && _elevenLabsService.canUseElevenLabs,
+    );
+    await _chatRepository.saveMessage(message);
+    _reloadMessages();
+
+    if (!playVoice) {
+      return;
+    }
+
+    if (raiseHand) {
+      _handController.setHandUp();
+    }
+
+    if (_isChatMode && useElevenLabs) {
+      await _playAssistantVoicePipeline(
+        text,
+        localeController: localeController,
+      );
+      return;
+    }
+
+    await _ttsService.speak(text, _resolveChatTtsLocale(messageHint: text));
+    _scheduleSpeakingFallback(text);
+    _handController.setHandDown();
+  }
+
+  Future<void> _playAssistantVoicePipeline(
+    String text, {
+    required ViolettaLocaleController localeController,
+  }) async {
+    final String ttsLocale = _resolveChatTtsLocale(messageHint: text);
     try {
-      return _idleDialogTextFor(ViolettaLocaleScope.of(context).locale);
-    } catch (_) {
-      return 'Виолетта на связи. Напиши сообщение ниже.';
+      final VoiceSynthesisResult synthesis =
+          await _elevenLabsService.synthesizeSpeech(
+        text: text,
+        voiceId: _elevenLabsVoiceId,
+        fallbackTts: _ttsService,
+        fallbackLocale: ttsLocale,
+      );
+
+      if (synthesis.usedLocalTts) {
+        _scheduleSpeakingFallback(text);
+        _handController.setHandDown();
+        return;
+      }
+
+      final Stream<List<int>>? audioStream = synthesis.audioStream;
+      if (audioStream == null) {
+        await _ttsService.speak(text, ttsLocale);
+        _scheduleSpeakingFallback(text);
+        _handController.setHandDown();
+        return;
+      }
+
+      final String audioPath =
+          await _elevenLabsService.saveStreamToTempFile(audioStream);
+      await _audioProcessorService.playVoiceWithEffects(audioPath, pitch: 1.05);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _assistantState = AssistantState.speaking;
+        _currentAvatarState = AvatarAnimationState.speaking;
+      });
+      _handController.setHandDown();
+      _speakingFallbackTimer?.cancel();
+      _speakingFallbackTimer = Timer(const Duration(seconds: 6), _onSpeechCompleted);
+    } catch (error) {
+      debugPrint('[HUD] eleven_labs_pipeline_error="$error"');
+      await _ttsService.speak(text, ttsLocale);
+      _scheduleSpeakingFallback(text);
+      _handController.setHandDown();
+    }
+  }
+
+  Future<void> _translateAssistantMessage(MessageModel message) async {
+    if (message.senderId != _violettaSenderId) {
+      return;
+    }
+
+    final String source = message.sourceLanguageCode;
+    final String target = source == 'ko' ? 'ru' : 'ko';
+
+    try {
+      final String translated = await _translatorRepository.translate(
+        message.originalText,
+        source: source,
+        target: target,
+      );
+      await _chatRepository.addTranslation(message.id, target, translated);
+      _reloadMessages();
+    } catch (error) {
+      debugPrint('[HUD] message_translation_error="$error"');
     }
   }
 
@@ -508,42 +712,59 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
       return;
     }
     await _geminiService.applyLocale(turn.switchedLocale!);
-    setState(() {
-      _dialogText = turn.confirmationSpeech;
-      _assistantState = AssistantState.sleeping;
-      _currentAvatarState = AvatarAnimationState.idle;
-      _spatialMarkers = <SpatialMarker>[];
-    });
-    _scheduleSpeakingFallback(turn.confirmationSpeech);
-  }
-
-  Future<void> _handleSystemUtilitySleeping(String confirmationSpeech) async {
     if (!mounted) {
       return;
     }
     setState(() {
-      _dialogText = confirmationSpeech;
       _assistantState = AssistantState.sleeping;
       _currentAvatarState = AvatarAnimationState.idle;
       _spatialMarkers = <SpatialMarker>[];
     });
-    _scheduleSpeakingFallback(confirmationSpeech);
+    await _appendAssistantMessage(
+      turn.confirmationSpeech,
+      localeController: controller,
+      useElevenLabs: false,
+    );
+  }
+
+  Future<void> _handleSystemUtilitySleeping(
+    String confirmationSpeech, {
+    required ViolettaLocaleController localeController,
+  }) async {
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _assistantState = AssistantState.sleeping;
+      _currentAvatarState = AvatarAnimationState.idle;
+      _spatialMarkers = <SpatialMarker>[];
+    });
+    await _appendAssistantMessage(
+      confirmationSpeech,
+      localeController: localeController,
+      useElevenLabs: false,
+    );
   }
 
   Future<void> _handleLocaleSwitchTurn(ViolettaGeminiTurnResult turn) async {
     if (!mounted) {
       return;
     }
+    final ViolettaLocaleController localeController =
+        ViolettaLocaleScope.of(context);
     if (turn.switchedLocale != null) {
       await _geminiService.applyLocale(turn.switchedLocale!);
     }
     setState(() {
-      _dialogText = turn.confirmationSpeech;
       _assistantState = AssistantState.sleeping;
       _currentAvatarState = AvatarAnimationState.idle;
       _spatialMarkers = <SpatialMarker>[];
     });
-    _scheduleSpeakingFallback(turn.confirmationSpeech);
+    await _appendAssistantMessage(
+      turn.confirmationSpeech,
+      localeController: localeController,
+      useElevenLabs: false,
+    );
     debugPrint('[HUD] system_switch_locale="${turn.switchedLocale?.code}"');
   }
 
@@ -572,6 +793,7 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
         ViolettaLocaleScope.of(context);
 
     await _ttsService.stop();
+    await _audioProcessorService.stopPlayback();
     _speakingFallbackTimer?.cancel();
 
     if (_isChatMode) {
@@ -585,14 +807,19 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
           await _commandService.processIncomingSTT(
         message,
         localeController: localeController,
-        ttsService: _ttsService,
+        ttsService: null,
       );
       if (localUtility.handled) {
         _textController.clear();
+        await _persistUserMessage(message, localeController);
+        _handController.setHandUp();
         if (!mounted) {
           return;
         }
-        await _handleSystemUtilitySleeping(localUtility.confirmationSpeech);
+        await _handleSystemUtilitySleeping(
+          localUtility.confirmationSpeech,
+          localeController: localeController,
+        );
         debugPrint('[HUD] local_utility="$message"');
         return;
       }
@@ -606,9 +833,12 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
     _textController.clear();
     debugPrint('[HUD] user_message="$message"');
 
+    if (_isChatMode) {
+      await _persistUserMessage(message, localeController);
+      _handController.setHandUp();
+    }
+
     try {
-      String replyText;
-      final String ttsLocaleId;
       if (_isChatMode) {
         final ViolettaGeminiTurnResult turn =
             await _commandService.processGeminiStream(
@@ -624,7 +854,10 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
         }
         if (turn.alarmSet) {
           await _geminiService.cancelActiveStream();
-          await _handleSystemUtilitySleeping(turn.confirmationSpeech);
+          await _handleSystemUtilitySleeping(
+            turn.confirmationSpeech,
+            localeController: localeController,
+          );
           debugPrint(
             '[HUD] system_set_alarm="${turn.alarmHour}:${turn.alarmMinute}"',
           );
@@ -636,11 +869,16 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
             return;
           }
           setState(() {
-            _dialogText = _idleDialogTextFor(localeController.locale);
             _assistantState = AssistantState.sleeping;
             _currentAvatarState = AvatarAnimationState.idle;
             _spatialMarkers = <SpatialMarker>[];
           });
+          await _appendAssistantMessage(
+            _idleDialogTextFor(localeController.locale),
+            localeController: localeController,
+            playVoice: false,
+          );
+          _handController.setHandDown();
           debugPrint('[HUD] system_open_app="${turn.packageName}"');
           return;
         }
@@ -654,41 +892,68 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
           final String notInstalledText = prefersKorean
               ? '앱이 설치되어 있지 않습니다'
               : 'Приложение не установлено';
-          final String ttsLocale = prefersKorean
-              ? ViolettaAppLocale.korean.ttsLocaleId
-              : ViolettaAppLocale.russian.ttsLocaleId;
           setState(() {
-            _dialogText = notInstalledText;
             _assistantState = AssistantState.speaking;
             _currentAvatarState = AvatarAnimationState.speaking;
             _spatialMarkers = <SpatialMarker>[];
           });
-          await _ttsService.speak(notInstalledText, ttsLocale);
-          _scheduleSpeakingFallback(notInstalledText);
+          await _appendAssistantMessage(
+            notInstalledText,
+            localeController: localeController,
+            useElevenLabs: false,
+          );
           debugPrint('[HUD] system_open_app_missing="${turn.packageName}"');
           return;
         }
-        replyText = turn.displayText;
-        ttsLocaleId = _resolveChatTtsLocale(messageHint: message);
-      } else {
-        final bool latinOnly = _ocrService.isLatinOnly(message);
-        final String source = latinOnly ? 'en' : 'ru';
-        final String target = latinOnly ? 'ru' : 'ko';
-        replyText = await _translatorRepository.translate(
-          message,
-          source: source,
-          target: target,
+
+        final String replyText = turn.displayText;
+        if (replyText.isEmpty) {
+          if (!mounted) {
+            return;
+          }
+          setState(() {
+            _assistantState = AssistantState.idle;
+            _currentAvatarState = AvatarAnimationState.idle;
+          });
+          await _appendAssistantMessage(
+            'Я на связи, но ответ не успел дойти. Давай попробуем еще раз?',
+            localeController: localeController,
+            useElevenLabs: false,
+          );
+          return;
+        }
+
+        if (!mounted) {
+          return;
+        }
+        debugPrint('[HUD] mode=chat response="$replyText"');
+        setState(() {
+          _assistantState = AssistantState.speaking;
+          _currentAvatarState = AvatarAnimationState.speaking;
+          _spatialMarkers = _generateSpatialMarkers();
+        });
+        await _appendAssistantMessage(
+          replyText,
+          localeController: localeController,
+          raiseHand: false,
         );
-        ttsLocaleId = latinOnly ? 'ru-RU' : 'ko-KR';
+        return;
       }
+
+      final bool latinOnly = _ocrService.isLatinOnly(message);
+      final String source = latinOnly ? 'en' : 'ru';
+      final String target = latinOnly ? 'ru' : 'ko';
+      final String replyText = await _translatorRepository.translate(
+        message,
+        source: source,
+        target: target,
+      );
 
       if (replyText.isEmpty) {
         if (!mounted) {
           return;
         }
         setState(() {
-          _dialogText =
-              'Я на связи, но ответ не успел дойти. Давай попробуем еще раз?';
           _assistantState = AssistantState.idle;
           _currentAvatarState = AvatarAnimationState.idle;
         });
@@ -698,30 +963,39 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
       if (!mounted) {
         return;
       }
-      debugPrint(
-        '[HUD] mode=${_isChatMode ? 'chat' : 'translate'} response="$replyText"',
-      );
+      debugPrint('[HUD] mode=translate response="$replyText"');
       setState(() {
-        _dialogText = replyText;
         _assistantState = AssistantState.speaking;
         _currentAvatarState = AvatarAnimationState.speaking;
         _spatialMarkers = _generateSpatialMarkers();
       });
-      await _ttsService.speak(replyText, ttsLocaleId);
-      _scheduleSpeakingFallback(replyText);
+      await _appendAssistantMessage(
+        replyText,
+        localeController: localeController,
+        useElevenLabs: false,
+        raiseHand: false,
+      );
     } catch (error) {
       if (!mounted) {
         return;
       }
-      debugPrint('[HUD] papago_translation_error="$error"');
+      debugPrint('[HUD] request_error="$error"');
       await _ttsService.stop();
       setState(() {
-        _dialogText = 'Перевод временно недоступен. Работаю в fallback-режиме.';
         _assistantState = AssistantState.error;
         _currentAvatarState = AvatarAnimationState.idle;
       });
+      await _appendAssistantMessage(
+        _isChatMode
+            ? 'Связь с ИИ немного нестабильна. Давай повторим запрос.'
+            : 'Перевод временно недоступен. Работаю в fallback-режиме.',
+        localeController: localeController,
+        useElevenLabs: false,
+        playVoice: false,
+      );
+      _handController.setHandDown();
     } finally {
-      debugPrint('[HUD] papago_request_completed');
+      debugPrint('[HUD] request_completed');
     }
   }
 
@@ -855,6 +1129,15 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
               'Seoul, KR',
               style: TextStyle(color: neonCyan, fontWeight: FontWeight.w600),
             ),
+            const SizedBox(width: 4),
+            IconButton(
+              tooltip: 'BYOK-ключи и голос',
+              iconSize: 20,
+              splashRadius: 18,
+              color: neonCyan,
+              onPressed: () => showByokKeysPanel(context),
+              icon: const Icon(Icons.settings_voice_rounded),
+            ),
             if (kDebugMode) ...[
               const SizedBox(width: 8),
               _buildFormFactorDebugBadge(formFactor: formFactor),
@@ -907,9 +1190,9 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
       child: SizedBox(
         width: avatarSize,
         height: avatarSize,
-        child: Violetta3DView(
-          lipsyncController: _lipsyncController,
-          gestureController: _gestureBindingController,
+        child: ViolettaView(
+          controller: _handController,
+          fit: BoxFit.contain,
         ),
       ),
     );
@@ -943,32 +1226,10 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
             const SizedBox(height: 8),
             _buildAvatarStateControlsInline(),
             const SizedBox(height: 8),
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 180),
-              child: _assistantState == AssistantState.loading
-                  ? Row(
-                      key: const ValueKey('loading'),
-                      children: [
-                        SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2.2,
-                            color: neonCyan,
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        const Text(
-                          'Виолетта думает...',
-                          style: TextStyle(color: Colors.white70),
-                        ),
-                      ],
-                    )
-                  : Text(
-                      _dialogText,
-                      key: const ValueKey('dialog'),
-                      style: const TextStyle(color: Colors.white),
-                    ),
+            _buildChatHistory(
+              neonCyan: neonCyan,
+              neonPink: neonPink,
+              maxHeight: 220,
             ),
             const SizedBox(height: 12),
             _buildMessageInputRow(
@@ -1019,32 +1280,10 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
               const SizedBox(height: 8),
               _buildAvatarStateControlsInline(),
               const SizedBox(height: 10),
-              AnimatedSwitcher(
-                duration: const Duration(milliseconds: 180),
-                child: _assistantState == AssistantState.loading
-                    ? Row(
-                        key: const ValueKey('loading_console'),
-                        children: [
-                          SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2.2,
-                              color: neonCyan,
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          const Text(
-                            'Виолетта думает...',
-                            style: TextStyle(color: Colors.white70),
-                          ),
-                        ],
-                      )
-                    : Text(
-                        _dialogText,
-                        key: const ValueKey('dialog_console'),
-                        style: const TextStyle(color: Colors.white),
-                      ),
+              _buildChatHistory(
+                neonCyan: neonCyan,
+                neonPink: neonPink,
+                maxHeight: 180,
               ),
               const SizedBox(height: 12),
               _buildMessageInputRow(
@@ -1054,6 +1293,125 @@ class _HudMainScreenState extends State<HudMainScreen> with TickerProviderStateM
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildChatHistory({
+    required Color neonCyan,
+    required Color neonPink,
+    required double maxHeight,
+  }) {
+    return SizedBox(
+      height: maxHeight,
+      child: Stack(
+        children: <Widget>[
+          ListView.builder(
+            controller: _chatScrollController,
+            itemCount: _messages.length,
+            itemBuilder: (BuildContext context, int index) {
+              final MessageModel message = _messages[index];
+              return _buildMessageBubble(
+                message: message,
+                neonCyan: neonCyan,
+                neonPink: neonPink,
+              );
+            },
+          ),
+          if (_assistantState == AssistantState.loading)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                color: Colors.black.withOpacity(0.45),
+                child: Row(
+                  children: <Widget>[
+                    SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.2,
+                        color: neonCyan,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    const Text(
+                      'Виолетта думает...',
+                      style: TextStyle(color: Colors.white70),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMessageBubble({
+    required MessageModel message,
+    required Color neonCyan,
+    required Color neonPink,
+  }) {
+    final bool isUser = message.senderId == _userSenderId;
+    final Color bubbleColor = isUser
+        ? neonPink.withOpacity(0.22)
+        : neonCyan.withOpacity(0.18);
+    final Color borderColor =
+        isUser ? neonPink.withOpacity(0.65) : neonCyan.withOpacity(0.65);
+
+    return Align(
+      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        constraints: const BoxConstraints(maxWidth: 280),
+        decoration: BoxDecoration(
+          color: bubbleColor,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: borderColor),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Expanded(
+                  child: Text(
+                    message.originalText,
+                    style: const TextStyle(color: Colors.white, fontSize: 13.5),
+                  ),
+                ),
+                if (!isUser)
+                  IconButton(
+                    tooltip: 'Перевести',
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    onPressed: () => _translateAssistantMessage(message),
+                    icon: const Text('🌐', style: TextStyle(fontSize: 16)),
+                  ),
+              ],
+            ),
+            if (message.translations.isNotEmpty) ...<Widget>[
+              const SizedBox(height: 6),
+              ...message.translations.entries.map(
+                (MapEntry<String, String> entry) => Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                    '${entry.key.toUpperCase()}: ${entry.value}',
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.78),
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ],
         ),
       ),
     );

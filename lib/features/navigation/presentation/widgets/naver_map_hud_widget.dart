@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_naver_map/flutter_naver_map.dart';
+import 'package:violetta_app/features/navigation/services/naver_map_bootstrap_service.dart';
 
 class NaverMapHudWidget extends StatelessWidget {
   const NaverMapHudWidget({super.key});
@@ -15,6 +16,21 @@ class NaverMapHudWidget extends StatelessWidget {
           child: const Text(
             'Naver Map background (mobile only)',
             style: TextStyle(color: Colors.white70),
+          ),
+        ),
+      );
+    }
+
+    if (!NaverMapBootstrapService.instance.isReady) {
+      return Positioned.fill(
+        child: Container(
+          color: Colors.black.withValues(alpha: 0.25),
+          alignment: Alignment.center,
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: const Text(
+            'Карта Naver: добавьте Naver Client ID в панели BYOK-ключей.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.white70, fontSize: 13),
           ),
         ),
       );

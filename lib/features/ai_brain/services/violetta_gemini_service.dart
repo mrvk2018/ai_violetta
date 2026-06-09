@@ -1,20 +1,25 @@
 import 'dart:async';
 
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
+import 'package:violetta_app/features/auth/auth_service.dart';
+import 'package:violetta_app/features/auth/oauth_http_client.dart';
 import 'package:violetta_app/features/onboarding/domain/models/violetta_app_locale.dart';
 
-/// Gemini 2.5 Flash brain for Violetta with bilingual AR-optimized system instruction.
+/// Gemini 2.5 Flash brain for Violetta with BYOK Google OAuth access tokens.
 class ViolettaGeminiService {
-  ViolettaGeminiService({ViolettaAppLocale activeLocale = ViolettaAppLocale.russian})
-      : _activeLocale = activeLocale,
-        _model = _buildModel(activeLocale) {
-    _chatSession = _model?.startChat();
-  }
+  ViolettaGeminiService({
+    ViolettaAppLocale activeLocale = ViolettaAppLocale.russian,
+    AuthService? authService,
+  })  : _activeLocale = activeLocale,
+        _authService = authService ?? AuthService.instance;
 
+  static const String _oauthApiKeyPlaceholder = 'byok-oauth';
+
+  final AuthService _authService;
   ViolettaAppLocale _activeLocale;
   GenerativeModel? _model;
   ChatSession? _chatSession;
+  String? _boundAccessToken;
   StreamSubscription<GenerateContentResponse>? _activeResponseSubscription;
 
   static const String _baseSystemInstruction = '''
@@ -90,13 +95,12 @@ If input is unintelligible after cleanup, ask one short clarifying question in t
 
   /// Rebuilds the chat session with locale-biased system instructions (no app restart).
   Future<void> applyLocale(ViolettaAppLocale locale) async {
-    if (_activeLocale == locale) {
+    if (_activeLocale == locale && _chatSession != null) {
       return;
     }
     await cancelActiveStream();
     _activeLocale = locale;
-    _model = _buildModel(locale);
-    _chatSession = _model?.startChat();
+    await _refreshModelSession(force: true);
   }
 
   static String _systemInstructionFor(ViolettaAppLocale locale) {
@@ -114,17 +118,38 @@ ACTIVE INTERFACE LOCALE: RUSSIAN (ru-RU)
     return '$_baseSystemInstruction\n$localeDirective';
   }
 
-  static GenerativeModel? _buildModel(ViolettaAppLocale locale) {
-    final String? apiKey = dotenv.env['GEMINI_API_KEY']?.trim();
-    if (apiKey == null || apiKey.isEmpty) {
-      return null;
-    }
-
+  Future<GenerativeModel?> _buildModel(
+    ViolettaAppLocale locale,
+    String accessToken,
+  ) async {
     return GenerativeModel(
       model: 'gemini-2.5-flash',
-      apiKey: apiKey,
+      apiKey: _oauthApiKeyPlaceholder,
+      httpClient: BearerAuthHttpClient(accessToken),
       systemInstruction: Content.system(_systemInstructionFor(locale)),
     );
+  }
+
+  Future<bool> _refreshModelSession({bool force = false}) async {
+    final String? accessToken = await _authService.getUserAccessToken();
+    if (accessToken == null || accessToken.isEmpty) {
+      _model = null;
+      _chatSession = null;
+      _boundAccessToken = null;
+      return false;
+    }
+
+    if (!force &&
+        _boundAccessToken == accessToken &&
+        _chatSession != null &&
+        _model != null) {
+      return true;
+    }
+
+    _model = await _buildModel(_activeLocale, accessToken);
+    _chatSession = _model?.startChat();
+    _boundAccessToken = accessToken;
+    return _chatSession != null;
   }
 
   /// Cancels an in-flight Gemini stream (e.g. after a system token is handled).
@@ -133,10 +158,14 @@ ACTIVE INTERFACE LOCALE: RUSSIAN (ru-RU)
     _activeResponseSubscription = null;
   }
 
+  static const String _missingAuthMessage =
+      'Войди через Google — тогда я смогу использовать твои личные квоты Gemini.';
+
   /// Sends a user turn and aggregates streamed model tokens into one HUD-safe reply.
   Future<String> sendMessage(String message) async {
-    if (_chatSession == null) {
-      return 'Я рядом, но пока не вижу ключ Gemini. Добавь GEMINI_API_KEY в .env и я сразу продолжу.';
+    final bool ready = await _refreshModelSession();
+    if (!ready || _chatSession == null) {
+      return _missingAuthMessage;
     }
 
     try {
@@ -146,7 +175,7 @@ ACTIVE INTERFACE LOCALE: RUSSIAN (ru-RU)
       }
       return reply;
     } on InvalidApiKey {
-      return 'Похоже, ключ Gemini сейчас не подошел. Обнови ключ, и я сразу продолжу помогать.';
+      return 'Не удалось авторизовать Gemini через Google. Выйди и войди снова.';
     } on UnsupportedUserLocation {
       return 'Я рядом! В этом регионе Gemini сейчас ограничен, но мы можем повторить запрос чуть позже.';
     } on GenerativeAIException {
@@ -160,48 +189,53 @@ ACTIVE INTERFACE LOCALE: RUSSIAN (ru-RU)
 
   /// Exposes token chunks for progressive HUD rendering and command interception.
   Stream<String> sendMessageStream(String message) {
-    if (_chatSession == null) {
-      return Stream<String>.value(
-        'Я рядом, но пока не вижу ключ Gemini. Добавь GEMINI_API_KEY в .env и я сразу продолжу.',
-      );
-    }
-
     final StreamController<String> controller = StreamController<String>();
 
-    unawaited(_activeResponseSubscription?.cancel());
-    _activeResponseSubscription = null;
-
-    final Stream<GenerateContentResponse> responseStream =
-        _chatSession!.sendMessageStream(Content.text(message));
-
-    _activeResponseSubscription = responseStream.listen(
-      (GenerateContentResponse chunk) {
-        final String? text = chunk.text;
-        if (text != null && text.isNotEmpty && !controller.isClosed) {
-          controller.add(text);
-        }
-      },
-      onError: (Object error, StackTrace stackTrace) {
+    unawaited(() async {
+      final bool ready = await _refreshModelSession();
+      if (!ready || _chatSession == null) {
         if (!controller.isClosed) {
-          if (error is GenerativeAIException) {
-            controller.add(
-              'Связь с ИИ немного нестабильна. Давай повторим запрос через пару секунд.',
-            );
-          } else {
-            controller.add(
-              'Я рядом, но сеть сейчас капризничает. Попробуй еще раз, и я отвечу.',
-            );
+          controller.add(_missingAuthMessage);
+          await controller.close();
+        }
+        return;
+      }
+
+      await _activeResponseSubscription?.cancel();
+      _activeResponseSubscription = null;
+
+      final Stream<GenerateContentResponse> responseStream =
+          _chatSession!.sendMessageStream(Content.text(message));
+
+      _activeResponseSubscription = responseStream.listen(
+        (GenerateContentResponse chunk) {
+          final String? text = chunk.text;
+          if (text != null && text.isNotEmpty && !controller.isClosed) {
+            controller.add(text);
           }
-          controller.close();
-        }
-      },
-      onDone: () {
-        if (!controller.isClosed) {
-          controller.close();
-        }
-      },
-      cancelOnError: true,
-    );
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          if (!controller.isClosed) {
+            if (error is GenerativeAIException) {
+              controller.add(
+                'Связь с ИИ немного нестабильна. Давай повторим запрос через пару секунд.',
+              );
+            } else {
+              controller.add(
+                'Я рядом, но сеть сейчас капризничает. Попробуй еще раз, и я отвечу.',
+              );
+            }
+            controller.close();
+          }
+        },
+        onDone: () {
+          if (!controller.isClosed) {
+            controller.close();
+          }
+        },
+        cancelOnError: true,
+      );
+    }());
 
     controller.onCancel = () {
       unawaited(_activeResponseSubscription?.cancel());
