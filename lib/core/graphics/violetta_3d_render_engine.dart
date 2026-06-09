@@ -1,8 +1,12 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:typed_data';
+import 'dart:ui' as ui show Codec, Image, ImageByteFormat, instantiateImageCodec;
 import 'dart:ui' show lerpDouble;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 /// Single-sprite 2.5D avatar engine for [bodyAsset] (`375×666` PNG).
 class Violetta3DRenderEngine extends StatefulWidget {
@@ -11,10 +15,15 @@ class Violetta3DRenderEngine extends StatefulWidget {
   static const Size imageReferenceSize = Size(375, 666);
   static const double imageAspectRatio = 375 / 666;
 
-  /// Normalized landmarks from PNG pixel analysis (origin top-left).
-  static const Offset leftEyeNorm = Offset(0.3972, 0.2634);
-  static const Offset rightEyeNorm = Offset(0.4736, 0.2686);
-  static const Offset mouthNorm = Offset(0.4839, 0.3099);
+  /// Fallback norms used until color-cluster scan completes (origin top-left).
+  static const Offset _fallbackLeftEyeNorm = Offset(0.3972, 0.2634);
+  static const Offset _fallbackRightEyeNorm = Offset(0.4736, 0.2686);
+  static const Offset _fallbackMouthNorm = Offset(0.4839, 0.3099);
+
+  static Offset leftEyeNorm = _fallbackLeftEyeNorm;
+  static Offset rightEyeNorm = _fallbackRightEyeNorm;
+  static Offset mouthNorm = _fallbackMouthNorm;
+  static bool landmarksDetected = false;
 
   final double lookAtX;
   final double lookAtY;
@@ -59,8 +68,166 @@ class Violetta3DRenderEngine extends StatefulWidget {
   static Rect fittedImageRect(Size containerSize) =>
       _SpriteDrawBox.fromCanvasSize(containerSize).rect;
 
+  static void applyDetectedLandmarks({
+    required Offset leftEye,
+    required Offset rightEye,
+    required Offset mouth,
+  }) {
+    leftEyeNorm = leftEye;
+    rightEyeNorm = rightEye;
+    mouthNorm = mouth;
+    landmarksDetected = true;
+  }
+
   @override
   State<Violetta3DRenderEngine> createState() => _Violetta3DRenderEngineState();
+}
+
+/// Scans [Violetta3DRenderEngine.bodyAsset] for red eye and blue mouth markup.
+class ViolettaFaceLandmarkDetector {
+  static Future<void>? _initialization;
+
+  static Future<void> ensureInitialized() {
+    return _initialization ??= _scanAssetLandmarks();
+  }
+
+  @visibleForTesting
+  static void resetForTest() {
+    _initialization = null;
+    Violetta3DRenderEngine.leftEyeNorm = Violetta3DRenderEngine._fallbackLeftEyeNorm;
+    Violetta3DRenderEngine.rightEyeNorm =
+        Violetta3DRenderEngine._fallbackRightEyeNorm;
+    Violetta3DRenderEngine.mouthNorm = Violetta3DRenderEngine._fallbackMouthNorm;
+    Violetta3DRenderEngine.landmarksDetected = false;
+  }
+
+  static Future<void> _scanAssetLandmarks() async {
+    final ByteData assetBytes =
+        await rootBundle.load(Violetta3DRenderEngine.bodyAsset);
+    final ui.Codec codec = await ui.instantiateImageCodec(
+      assetBytes.buffer.asUint8List(),
+    );
+    final ui.Image image = (await codec.getNextFrame()).image;
+
+    final int imageWidth = image.width;
+    final int imageHeight = image.height;
+    final ByteData? rawRgba = await image.toByteData(
+      format: ui.ImageByteFormat.rawRgba,
+    );
+    image.dispose();
+
+    if (rawRgba == null) {
+      debugPrint(
+        'ViolettaFaceLandmarkDetector: failed to read RGBA bytes — using fallback norms',
+      );
+      return;
+    }
+
+    final List<Offset> redPixels = <Offset>[];
+    final List<Offset> bluePixels = <Offset>[];
+
+    for (int y = 0; y < imageHeight; y++) {
+      for (int x = 0; x < imageWidth; x++) {
+        final int index = (y * imageWidth + x) * 4;
+        final int red = rawRgba.getUint8(index);
+        final int green = rawRgba.getUint8(index + 1);
+        final int blue = rawRgba.getUint8(index + 2);
+
+        if (red > 200 && green < 50 && blue < 50) {
+          redPixels.add(Offset(x.toDouble(), y.toDouble()));
+        } else if (red < 50 && green < 50 && blue > 200) {
+          bluePixels.add(Offset(x.toDouble(), y.toDouble()));
+        }
+      }
+    }
+
+    if (redPixels.isEmpty || bluePixels.isEmpty) {
+      debugPrint(
+        'ViolettaFaceLandmarkDetector: markup not found '
+        '(red=${redPixels.length}, blue=${bluePixels.length}) — using fallback norms',
+      );
+      return;
+    }
+
+    final List<List<Offset>> eyeClusters = _splitRedEyeClusters(redPixels);
+    final List<Offset> leftCluster = eyeClusters[0];
+    final List<Offset> rightCluster = eyeClusters[1];
+
+    if (leftCluster.isEmpty || rightCluster.isEmpty) {
+      debugPrint(
+        'ViolettaFaceLandmarkDetector: could not split eye clusters — using fallback norms',
+      );
+      return;
+    }
+
+    final Offset leftEyeNorm = _normalizedCentroid(
+      leftCluster,
+      imageWidth,
+      imageHeight,
+    );
+    final Offset rightEyeNorm = _normalizedCentroid(
+      rightCluster,
+      imageWidth,
+      imageHeight,
+    );
+    final Offset mouthNorm = _normalizedCentroid(
+      bluePixels,
+      imageWidth,
+      imageHeight,
+    );
+
+    Violetta3DRenderEngine.applyDetectedLandmarks(
+      leftEye: leftEyeNorm,
+      rightEye: rightEyeNorm,
+      mouth: mouthNorm,
+    );
+
+    debugPrint(
+      'ViolettaFaceLandmarkDetector: scan complete '
+      '(${imageWidth}x$imageHeight, red=${redPixels.length}, blue=${bluePixels.length})',
+    );
+    debugPrint(
+      '  leftEyeNorm=(${leftEyeNorm.dx.toStringAsFixed(4)}, ${leftEyeNorm.dy.toStringAsFixed(4)})',
+    );
+    debugPrint(
+      '  rightEyeNorm=(${rightEyeNorm.dx.toStringAsFixed(4)}, ${rightEyeNorm.dy.toStringAsFixed(4)})',
+    );
+    debugPrint(
+      '  mouthNorm=(${mouthNorm.dx.toStringAsFixed(4)}, ${mouthNorm.dy.toStringAsFixed(4)})',
+    );
+  }
+
+  static List<List<Offset>> _splitRedEyeClusters(List<Offset> redPixels) {
+    final List<double> xs = redPixels.map((Offset p) => p.dx).toList()..sort();
+    final double splitX = (xs.first + xs.last) * 0.5;
+
+    final List<Offset> leftCluster = <Offset>[];
+    final List<Offset> rightCluster = <Offset>[];
+    for (final Offset pixel in redPixels) {
+      if (pixel.dx < splitX) {
+        leftCluster.add(pixel);
+      } else {
+        rightCluster.add(pixel);
+      }
+    }
+
+    return <List<Offset>>[leftCluster, rightCluster];
+  }
+
+  static Offset _normalizedCentroid(
+    List<Offset> pixels,
+    int imageWidth,
+    int imageHeight,
+  ) {
+    double sumX = 0.0;
+    double sumY = 0.0;
+    for (final Offset pixel in pixels) {
+      sumX += pixel.dx;
+      sumY += pixel.dy;
+    }
+    final double count = pixels.length.toDouble();
+    return Offset(sumX / count / imageWidth, sumY / count / imageHeight);
+  }
 }
 
 /// BoxFit.contain layout for the sprite inside a canvas [Size].
@@ -162,6 +329,13 @@ class _Violetta3DRenderEngineState extends State<Violetta3DRenderEngine>
     });
 
     _scheduleNextBlink();
+    unawaited(
+      ViolettaFaceLandmarkDetector.ensureInitialized().then((_) {
+        if (mounted) {
+          setState(() {});
+        }
+      }),
+    );
   }
 
   @override
@@ -332,6 +506,8 @@ class _Violetta3DRenderEngineState extends State<Violetta3DRenderEngine>
                             lookAtY: lookAtY,
                             blinkProgress: blinkClosure,
                             mouthVolume: mouthVolume,
+                            landmarksDetected:
+                                Violetta3DRenderEngine.landmarksDetected,
                           ),
                         ),
                       ),
@@ -352,82 +528,128 @@ class _ViolettaFaceOverlayPainter extends CustomPainter {
   final double lookAtY;
   final double blinkProgress;
   final double mouthVolume;
+  final bool landmarksDetected;
 
   const _ViolettaFaceOverlayPainter({
     required this.lookAtX,
     required this.lookAtY,
     required this.blinkProgress,
     required this.mouthVolume,
+    required this.landmarksDetected,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
-    // 1. Абсолютные, выверенные до пикселя координаты под размер холста строго 500x500
-    // С учётом BoxFit.contain для картинки 375x666 и боковых отступов offsetX = 109.25
-    final double leftEyeX = 221.1;
-    final double leftEyeY = 131.7;
-
-    final double rightEyeX = 242.6;
-    final double rightEyeY = 134.3;
-
-    final double mouthX = 245.5;
-    final double mouthY = 155.0;
-
-    // 2. Идеальный, компактный масштаб элементов (scale = 500 / 666 ≈ 0.751)
-    final double currentScale = 0.751;
-
-    final double eyeRadiusX = 8.0 * currentScale;  // Аккуратная аниме-ширина белка
-    final double eyeRadiusY = 5.5 * currentScale;  // Аккуратная аниме-высота белка
-    final double pupilRadius = 3.0 * currentScale; // Маленький зрачок
-    final double mouthWidth = 12.0 * currentScale; // Изящная линия губ
-
-    // Настройка кистей
-    final Paint eyeBasePaint = Paint()..color = Colors.white..style = PaintingStyle.fill;
-    final Paint pupilPaint = Paint()..color = const Color(0xFF3D2A1C)..style = PaintingStyle.fill;
-    final Paint skinPaint = Paint()..color = const Color(0xFFC89472)..style = PaintingStyle.fill;
-
-    // 3. Отрисовка слоёв ЛЕВОГО ГЛАЗА
-    canvas.drawOval(Rect.fromCenter(center: Offset(leftEyeX, leftEyeY), width: eyeRadiusX * 2, height: eyeRadiusY * 2), eyeBasePaint);
-    double dynamicLeftX = leftEyeX + (lookAtX * 3.0 * currentScale);
-    double dynamicLeftY = leftEyeY + (lookAtY * 2.0 * currentScale);
-    canvas.drawCircle(Offset(dynamicLeftX, dynamicLeftY), pupilRadius, pupilPaint);
-
-    // 4. Отрисовка слоёв ПРАВОГО ГЛАЗА
-    canvas.drawOval(Rect.fromCenter(center: Offset(rightEyeX, rightEyeY), width: eyeRadiusX * 2, height: eyeRadiusY * 2), eyeBasePaint);
-    double dynamicRightX = rightEyeX + (lookAtX * 3.0 * currentScale);
-    double dynamicRightY = rightEyeY + (lookAtY * 2.0 * currentScale);
-    canvas.drawCircle(Offset(dynamicRightX, dynamicRightY), pupilRadius, pupilPaint);
-
-    // 5. Анимация МОРГАНИЯ (Заливка века сверху вниз)
-    if (blinkProgress > 0.0) {
-      double vHeight = eyeRadiusY * 2 * blinkProgress;
-      canvas.drawRect(Rect.fromLTWH(leftEyeX - eyeRadiusX, leftEyeY - eyeRadiusY, eyeRadiusX * 2, vHeight), skinPaint);
-      canvas.drawRect(Rect.fromLTWH(rightEyeX - eyeRadiusX, rightEyeY - eyeRadiusY, eyeRadiusX * 2, vHeight), skinPaint);
+    if (size.width <= 0 || size.height <= 0) {
+      return;
     }
 
-    // 6. Отрисовка РТА (Аккуратная линия губ)
+    final _SpriteDrawBox drawBox = _SpriteDrawBox.fromCanvasSize(size);
+    final double currentScale = drawBox.currentScale;
+
+    final Offset leftEye = drawBox.landmark(Violetta3DRenderEngine.leftEyeNorm);
+    final Offset rightEye =
+        drawBox.landmark(Violetta3DRenderEngine.rightEyeNorm);
+    final Offset mouth = drawBox.landmark(Violetta3DRenderEngine.mouthNorm);
+
+    final double eyeRadiusX = 8.0 * currentScale;
+    final double eyeRadiusY = 5.5 * currentScale;
+    final double pupilRadius = 3.0 * currentScale;
+    final double mouthWidth = 12.0 * currentScale;
+
+    final Paint eyeBasePaint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.fill;
+    final Paint pupilPaint = Paint()
+      ..color = const Color(0xFF3D2A1C)
+      ..style = PaintingStyle.fill;
+    final Paint skinPaint = Paint()
+      ..color = const Color(0xFFC89472)
+      ..style = PaintingStyle.fill;
+
+    canvas.drawOval(
+      Rect.fromCenter(
+        center: leftEye,
+        width: eyeRadiusX * 2,
+        height: eyeRadiusY * 2,
+      ),
+      eyeBasePaint,
+    );
+    canvas.drawCircle(
+      leftEye + Offset(lookAtX * 3.0 * currentScale, lookAtY * 2.0 * currentScale),
+      pupilRadius,
+      pupilPaint,
+    );
+
+    canvas.drawOval(
+      Rect.fromCenter(
+        center: rightEye,
+        width: eyeRadiusX * 2,
+        height: eyeRadiusY * 2,
+      ),
+      eyeBasePaint,
+    );
+    canvas.drawCircle(
+      rightEye + Offset(lookAtX * 3.0 * currentScale, lookAtY * 2.0 * currentScale),
+      pupilRadius,
+      pupilPaint,
+    );
+
+    if (blinkProgress > 0.0) {
+      final double lidHeight = eyeRadiusY * 2 * blinkProgress;
+      canvas.drawRect(
+        Rect.fromLTWH(
+          leftEye.dx - eyeRadiusX,
+          leftEye.dy - eyeRadiusY,
+          eyeRadiusX * 2,
+          lidHeight,
+        ),
+        skinPaint,
+      );
+      canvas.drawRect(
+        Rect.fromLTWH(
+          rightEye.dx - eyeRadiusX,
+          rightEye.dy - eyeRadiusY,
+          eyeRadiusX * 2,
+          lidHeight,
+        ),
+        skinPaint,
+      );
+    }
+
     final Paint mouthPaint = Paint()
       ..color = Colors.black
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5 * currentScale
       ..strokeCap = StrokeCap.round;
-
     final double mouthOpenHeight = 6.0 * currentScale * mouthVolume;
 
     if (mouthVolume < 0.1) {
-      canvas.drawLine(Offset(mouthX - mouthWidth / 2, mouthY), Offset(mouthX + mouthWidth / 2, mouthY), mouthPaint);
+      canvas.drawLine(
+        Offset(mouth.dx - mouthWidth / 2, mouth.dy),
+        Offset(mouth.dx + mouthWidth / 2, mouth.dy),
+        mouthPaint,
+      );
     } else {
-      final Path mouthPath = Path();
-      mouthPath.moveTo(mouthX - mouthWidth / 2, mouthY);
-      mouthPath.quadraticBezierTo(mouthX, mouthY + mouthOpenHeight, mouthX + mouthWidth / 2, mouthY);
+      final Path mouthPath = Path()
+        ..moveTo(mouth.dx - mouthWidth / 2, mouth.dy)
+        ..quadraticBezierTo(
+          mouth.dx,
+          mouth.dy + mouthOpenHeight,
+          mouth.dx + mouthWidth / 2,
+          mouth.dy,
+        );
       canvas.drawPath(mouthPath, mouthPaint);
     }
 
-    // 7. Белые дебаг-точки для HUD визуального контроля
-    final Paint debugPaint = Paint()..color = Colors.white..style = PaintingStyle.fill;
-    canvas.drawCircle(Offset(leftEyeX, leftEyeY), 1.5, debugPaint);
-    canvas.drawCircle(Offset(rightEyeX, rightEyeY), 1.5, debugPaint);
-    canvas.drawCircle(Offset(mouthX, mouthY), 1.5, debugPaint);
+    if (landmarksDetected) {
+      final Paint debugPaint = Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.fill;
+      canvas.drawCircle(leftEye, 1.5, debugPaint);
+      canvas.drawCircle(rightEye, 1.5, debugPaint);
+      canvas.drawCircle(mouth, 1.5, debugPaint);
+    }
   }
 
   @override
@@ -435,6 +657,7 @@ class _ViolettaFaceOverlayPainter extends CustomPainter {
     return oldDelegate.lookAtX != lookAtX ||
         oldDelegate.lookAtY != lookAtY ||
         oldDelegate.blinkProgress != blinkProgress ||
-        oldDelegate.mouthVolume != mouthVolume;
+        oldDelegate.mouthVolume != mouthVolume ||
+        oldDelegate.landmarksDetected != landmarksDetected;
   }
 }

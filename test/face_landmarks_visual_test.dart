@@ -3,52 +3,55 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:violetta_app/core/graphics/violetta_3d_render_engine.dart';
 
 void main() {
-  test('compare hardcoded landmarks vs PNG norms on current rig', () {
-    const Size rigSize = Violetta3DRenderEngine.canvasSize;
-    final Rect imageRect = Violetta3DRenderEngine.imageRectInRig();
+  TestWidgetsFlutterBinding.ensureInitialized();
 
-    final Offset expectedLeftEye = Offset(
-      imageRect.left + Violetta3DRenderEngine.leftEyeNorm.dx * imageRect.width,
-      imageRect.top + Violetta3DRenderEngine.leftEyeNorm.dy * imageRect.height,
+  setUp(ViolettaFaceLandmarkDetector.resetForTest);
+
+  test('color cluster detector finds red eyes and blue mouth markup', () async {
+    await ViolettaFaceLandmarkDetector.ensureInitialized();
+
+    expect(Violetta3DRenderEngine.landmarksDetected, isTrue);
+
+    final Offset left = Violetta3DRenderEngine.leftEyeNorm;
+    final Offset right = Violetta3DRenderEngine.rightEyeNorm;
+    final Offset mouth = Violetta3DRenderEngine.mouthNorm;
+
+    // ignore: avoid_print
+    print('detected leftEyeNorm=$left rightEyeNorm=$right mouthNorm=$mouth');
+
+    expect(left.dx, greaterThan(0.0));
+    expect(left.dx, lessThan(0.5));
+    expect(right.dx, greaterThan(left.dx));
+    expect(right.dx, lessThan(1.0));
+    expect(mouth.dy, greaterThan(left.dy));
+    expect(mouth.dx, greaterThan(left.dx));
+    expect(mouth.dx, lessThan(right.dx + 0.15));
+  });
+
+  test('detected norms map to rig centers inside imageRect', () async {
+    await ViolettaFaceLandmarkDetector.ensureInitialized();
+
+    final Rect imageRect = Violetta3DRenderEngine.imageRectInRig();
+    final Offset leftEye = Offset(
+      imageRect.left +
+          Violetta3DRenderEngine.leftEyeNorm.dx * imageRect.width,
+      imageRect.top +
+          Violetta3DRenderEngine.leftEyeNorm.dy * imageRect.height,
     );
-    final Offset expectedRightEye = Offset(
-      imageRect.left + Violetta3DRenderEngine.rightEyeNorm.dx * imageRect.width,
-      imageRect.top + Violetta3DRenderEngine.rightEyeNorm.dy * imageRect.height,
+    final Offset rightEye = Offset(
+      imageRect.left +
+          Violetta3DRenderEngine.rightEyeNorm.dx * imageRect.width,
+      imageRect.top +
+          Violetta3DRenderEngine.rightEyeNorm.dy * imageRect.height,
     );
-    final Offset expectedMouth = Offset(
+    final Offset mouth = Offset(
       imageRect.left + Violetta3DRenderEngine.mouthNorm.dx * imageRect.width,
       imageRect.top + Violetta3DRenderEngine.mouthNorm.dy * imageRect.height,
     );
 
-    const Offset hardcodedLeftEye = Offset(221.1, 131.7);
-    const Offset hardcodedRightEye = Offset(242.6, 134.3);
-    const Offset hardcodedMouth = Offset(245.5, 155.0);
-
-    final Offset leftDelta = hardcodedLeftEye - expectedLeftEye;
-    final Offset rightDelta = hardcodedRightEye - expectedRightEye;
-    final Offset mouthDelta = hardcodedMouth - expectedMouth;
-
-    // ignore: avoid_print
-    print('--- Landmark alignment report (${rigSize.width.toInt()}x${rigSize.height.toInt()}) ---');
-    // ignore: avoid_print
-    print('imageRect: $imageRect');
-    // ignore: avoid_print
-    print('leftEye  expected=$expectedLeftEye hardcoded=$hardcodedLeftEye delta=$leftDelta');
-    // ignore: avoid_print
-    print('rightEye expected=$expectedRightEye hardcoded=$hardcodedRightEye delta=$rightDelta');
-    // ignore: avoid_print
-    print('mouth    expected=$expectedMouth hardcoded=$hardcodedMouth delta=$mouthDelta');
-
-    final double leftDistance = leftDelta.distance;
-    final double rightDistance = rightDelta.distance;
-    final double mouthDistance = mouthDelta.distance;
-
-    // ignore: avoid_print
-    print(
-      'RESULT: ${leftDistance < 3 && rightDistance < 3 && mouthDistance < 3 ? "ALIGNED" : "MISALIGNED"} '
-      '(distances: left=$leftDistance, right=$rightDistance, mouth=$mouthDistance px)',
-    );
-
-    expect(leftDistance < 3.0 && rightDistance < 3.0 && mouthDistance < 3.0, isTrue);
+    expect(imageRect.contains(leftEye), isTrue);
+    expect(imageRect.contains(rightEye), isTrue);
+    expect(imageRect.contains(mouth), isTrue);
+    expect((rightEye.dx - leftEye.dx).abs(), greaterThan(8.0));
   });
 }
