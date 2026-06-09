@@ -4,15 +4,19 @@ import 'dart:ui' show lerpDouble;
 
 import 'package:flutter/material.dart';
 
-/// Single-sprite 2.5D avatar engine for Violetta full-body artwork.
+/// Single-sprite 2.5D avatar engine for [bodyAsset] (`375×666` PNG).
 ///
-/// Face landmarks are authored in a strict [faceRigSize] square and mapped onto
-/// [imageReferenceSize] via [rigToImage] / [imageRectInRig].
+/// Face overlay geometry is authored in PNG-normalized space and scaled by the
+/// rendered sprite rect (`scale = imageRect.height / imageReferenceSize.height`).
 class Violetta3DRenderEngine extends StatefulWidget {
   static const String bodyAsset = 'assets/violetta_bodyfull.png';
   static const Size canvasSize = Size(500, 500);
-  static const Size faceRigSize = Size(500, 500);
   static const Size imageReferenceSize = Size(375, 666);
+
+  /// Normalized landmarks from PNG pixel analysis (origin top-left).
+  static const Offset leftEyeNorm = Offset(0.3972, 0.2634);
+  static const Offset rightEyeNorm = Offset(0.4736, 0.2686);
+  static const Offset mouthNorm = Offset(0.4839, 0.3099);
 
   /// Normalized look target in [-1.0, 1.0].
   final double lookAtX;
@@ -34,75 +38,55 @@ class Violetta3DRenderEngine extends StatefulWidget {
     this.mouthVolume = 0.0,
   });
 
-  /// Face landmarks in native sprite pixels, projected into rig space.
-  static const Offset _leftEyeImage = Offset(149.0, 176.0);
-  static const Offset _rightEyeImage = Offset(178.0, 179.0);
-  static const Offset _mouthImage = Offset(181.0, 207.0);
-
-  static Offset get leftEyeSocketRig => imageToRig(_leftEyeImage);
-  static Offset get rightEyeSocketRig => imageToRig(_rightEyeImage);
-  static Offset get gazeCenterRig => Offset(
-        (leftEyeSocketRig.dx + rightEyeSocketRig.dx) * 0.5,
-        (leftEyeSocketRig.dy + rightEyeSocketRig.dy) * 0.5,
-      );
-  static Offset get mouthCenterRig => imageToRig(_mouthImage);
-  static Offset get bodyTiltPivotNorm => Offset(
-        gazeCenterRig.dx / faceRigSize.width,
-        gazeCenterRig.dy / faceRigSize.height,
+  static Offset get gazeCenterNorm => Offset(
+        (leftEyeNorm.dx + rightEyeNorm.dx) * 0.5,
+        (leftEyeNorm.dy + rightEyeNorm.dy) * 0.5,
       );
 
-  static double get _rigContainScale => math.min(
-        faceRigSize.width / imageReferenceSize.width,
-        faceRigSize.height / imageReferenceSize.height,
-      );
+  static Offset get bodyTiltPivotNorm => gazeCenterNorm;
 
-  static Offset get _rigImageOffset => Offset(
-        (faceRigSize.width - imageReferenceSize.width * _rigContainScale) / 2.0,
-        (faceRigSize.height - imageReferenceSize.height * _rigContainScale) / 2.0,
-      );
+  static double layoutScale(Size layoutSize) => imageRectInLayout(layoutSize).height /
+      imageReferenceSize.height;
 
-  /// Letterboxed sprite destination inside the 500×500 rig.
-  static Rect imageRectInRig() {
-    final double scale = _rigContainScale;
+  static Rect imageRectInLayout(Size layoutSize) {
+    final double scale = math.min(
+      layoutSize.width / imageReferenceSize.width,
+      layoutSize.height / imageReferenceSize.height,
+    );
     final double width = imageReferenceSize.width * scale;
     final double height = imageReferenceSize.height * scale;
-    final Offset offset = _rigImageOffset;
-    return Rect.fromLTWH(offset.dx, offset.dy, width, height);
+    final double left = (layoutSize.width - width) / 2.0;
+    final double top = (layoutSize.height - height) / 2.0;
+    return Rect.fromLTWH(left, top, width, height);
   }
 
-  /// Maps a rig-space landmark to native sprite pixels.
-  static Offset rigToImage(Offset rigPoint) {
-    final Offset offset = _rigImageOffset;
-    final double scale = _rigContainScale;
+  /// Sprite destination rect inside [canvasSize].
+  static Rect imageRectInRig() => imageRectInLayout(canvasSize);
+
+  /// Maps normalized PNG coordinates to canvas coordinates.
+  static Offset landmarkOnCanvas(Offset normalized, Rect imageRect) {
     return Offset(
-      (rigPoint.dx - offset.dx) / scale,
-      (rigPoint.dy - offset.dy) / scale,
+      imageRect.left + normalized.dx * imageRect.width,
+      imageRect.top + normalized.dy * imageRect.height,
     );
   }
 
-  /// Maps native sprite pixels back into the 500×500 rig box.
-  static Offset imageToRig(Offset imagePoint) {
-    final Offset offset = _rigImageOffset;
-    final double scale = _rigContainScale;
-    return Offset(
-      imagePoint.dx * scale + offset.dx,
-      imagePoint.dy * scale + offset.dy,
-    );
-  }
+  static Offset get leftEyeCanvas => landmarkOnCanvas(leftEyeNorm, imageRectInRig());
+  static Offset get rightEyeCanvas => landmarkOnCanvas(rightEyeNorm, imageRectInRig());
+  static Offset get gazeCenterCanvas => landmarkOnCanvas(gazeCenterNorm, imageRectInRig());
+  static Offset get mouthCenterCanvas => landmarkOnCanvas(mouthNorm, imageRectInRig());
 
-  /// Maps a pointer inside the strict 500×500 avatar box to normalized lookAt.
+  /// Maps a pointer inside the avatar box to normalized lookAt.
   static Offset lookAtFromAvatarPointer(Offset pointerInAvatarBox) {
-    assert(
-      canvasSize == faceRigSize,
-      'Avatar look-at box must match the 500×500 face rig',
-    );
+    final Rect imageRect = imageRectInRig();
     final Offset clampedPointer = Offset(
       pointerInAvatarBox.dx.clamp(0.0, canvasSize.width),
       pointerInAvatarBox.dy.clamp(0.0, canvasSize.height),
     );
-    final Offset eyeCenterInBox = gazeCenterRig;
-    final Offset delta = clampedPointer - eyeCenterInBox;
-    const double maxReach = 90.0;
+    final Offset eyeCenter = gazeCenterCanvas;
+    final double scale = imageRect.height / imageReferenceSize.height;
+    final double maxReach = 90.0 * scale;
+    final Offset delta = clampedPointer - eyeCenter;
     return Offset(
       (delta.dx / maxReach).clamp(-1.0, 1.0),
       (delta.dy / maxReach).clamp(-1.0, 1.0),
@@ -110,17 +94,8 @@ class Violetta3DRenderEngine extends StatefulWidget {
   }
 
   /// Image destination rect when [containerSize] uses [BoxFit.contain].
-  static Rect fittedImageRect(Size containerSize) {
-    final double scale = math.min(
-      containerSize.width / imageReferenceSize.width,
-      containerSize.height / imageReferenceSize.height,
-    );
-    final double width = imageReferenceSize.width * scale;
-    final double height = imageReferenceSize.height * scale;
-    final double left = (containerSize.width - width) / 2.0;
-    final double top = (containerSize.height - height) / 2.0;
-    return Rect.fromLTWH(left, top, width, height);
-  }
+  static Rect fittedImageRect(Size containerSize) =>
+      imageRectInLayout(containerSize);
 
   @override
   State<Violetta3DRenderEngine> createState() => _Violetta3DRenderEngineState();
@@ -137,12 +112,6 @@ class _Violetta3DRenderEngineState extends State<Violetta3DRenderEngine>
   static const double _maxBodyYaw = 0.14;
   static const double _maxBodyPitch = 0.08;
   static const double _breathScaleAmplitude = 0.012;
-  static const double _maxPupilShiftPx = _ViolettaFaceOverlayPainter.maxPupilShiftPx;
-
-  Offset get _leftEyeSocketRig => Violetta3DRenderEngine.leftEyeSocketRig;
-  Offset get _rightEyeSocketRig => Violetta3DRenderEngine.rightEyeSocketRig;
-  Offset get _mouthCenterRig => Violetta3DRenderEngine.mouthCenterRig;
-  Offset get _bodyTiltPivotNorm => Violetta3DRenderEngine.bodyTiltPivotNorm;
 
   late final AnimationController _breathController;
   late final AnimationController _blinkController;
@@ -218,16 +187,16 @@ class _Violetta3DRenderEngineState extends State<Violetta3DRenderEngine>
 
   double _clampLook(double value) => value.clamp(-1.0, 1.0);
 
-  Offset _clampPupilShift(double lookAtX, double lookAtY) {
+  Offset _clampPupilShift(double lookAtX, double lookAtY, double maxShiftPx) {
     final Offset raw = Offset(
-      lookAtX * _maxPupilShiftPx,
-      lookAtY * _maxPupilShiftPx,
+      lookAtX * maxShiftPx,
+      lookAtY * maxShiftPx,
     );
     final double distance = raw.distance;
-    if (distance <= _maxPupilShiftPx) {
+    if (distance <= maxShiftPx) {
       return raw;
     }
-    return Offset.fromDirection(raw.direction, _maxPupilShiftPx);
+    return Offset.fromDirection(raw.direction, maxShiftPx);
   }
 
   Alignment _pivotAlignment(Offset normalized) {
@@ -276,17 +245,23 @@ class _Violetta3DRenderEngineState extends State<Violetta3DRenderEngine>
   @override
   Widget build(BuildContext context) {
     if (!_isRenderActive) {
-      return const SizedBox(
-        width: 500,
-        height: 500,
+      return SizedBox(
+        width: Violetta3DRenderEngine.canvasSize.width,
+        height: Violetta3DRenderEngine.canvasSize.height,
       );
     }
 
     final double lookAtX = _clampLook(widget.lookAtX);
     final double lookAtY = _clampLook(widget.lookAtY);
     final double mouthVolume = widget.mouthVolume.clamp(0.0, 1.0);
-    final Offset pupilShift = _clampPupilShift(lookAtX, lookAtY);
     final Rect imageRect = Violetta3DRenderEngine.imageRectInRig();
+    final double scale =
+        imageRect.height / Violetta3DRenderEngine.imageReferenceSize.height;
+    final Offset pupilShift = _clampPupilShift(
+      lookAtX,
+      lookAtY,
+      _ViolettaFaceOverlayPainter.basePupilShiftPx * scale,
+    );
 
     return RepaintBoundary(
       child: SizedBox(
@@ -306,16 +281,20 @@ class _Violetta3DRenderEngineState extends State<Violetta3DRenderEngine>
               fit: BoxFit.contain,
               child: Transform.scale(
                 scaleY: breathScale,
-                alignment: _pivotAlignment(_bodyTiltPivotNorm),
+                alignment: _pivotAlignment(
+                  Violetta3DRenderEngine.bodyTiltPivotNorm,
+                ),
                 child: Transform(
-                  alignment: _pivotAlignment(_bodyTiltPivotNorm),
+                  alignment: _pivotAlignment(
+                    Violetta3DRenderEngine.bodyTiltPivotNorm,
+                  ),
                   transform: _buildBodyTiltMatrix(
                     lookAtX: lookAtX,
                     lookAtY: lookAtY,
                   ),
                   child: SizedBox(
-                    width: Violetta3DRenderEngine.faceRigSize.width,
-                    height: Violetta3DRenderEngine.faceRigSize.height,
+                    width: Violetta3DRenderEngine.canvasSize.width,
+                    height: Violetta3DRenderEngine.canvasSize.height,
                     child: Stack(
                       clipBehavior: Clip.hardEdge,
                       children: <Widget>[
@@ -350,11 +329,14 @@ class _Violetta3DRenderEngineState extends State<Violetta3DRenderEngine>
                           ),
                         ),
                         CustomPaint(
-                          size: Violetta3DRenderEngine.faceRigSize,
+                          size: Violetta3DRenderEngine.canvasSize,
                           painter: _ViolettaFaceOverlayPainter(
-                            leftEyeSocket: _leftEyeSocketRig,
-                            rightEyeSocket: _rightEyeSocketRig,
-                            mouthCenter: _mouthCenterRig,
+                            scale: scale,
+                            leftEyeCenter: Violetta3DRenderEngine.leftEyeCanvas,
+                            rightEyeCenter:
+                                Violetta3DRenderEngine.rightEyeCanvas,
+                            mouthCenter:
+                                Violetta3DRenderEngine.mouthCenterCanvas,
                             pupilShift: pupilShift,
                             blinkClosure: blinkClosure,
                             mouthVolume: mouthVolume,
@@ -373,126 +355,144 @@ class _Violetta3DRenderEngineState extends State<Violetta3DRenderEngine>
   }
 }
 
+/// Face overlay scaled from PNG reference space (`375×666`).
 class _ViolettaFaceOverlayPainter extends CustomPainter {
-  static const double pupilRadius = 1.8;
-  static const double pupilHighlightRadius = 0.75;
-  static const double maxPupilShiftPx = 2.0;
-  static const double blinkEyeWidth = 8.5;
-  static const double blinkEyeHeight = 5.0;
-  static const double mouthClosedWidth = 13.0;
-  static const double mouthOpenWidth = 18.0;
-  static const double mouthOpenDepth = 7.0;
-  static const double innerMouthMaxWidth = 10.0;
-  static const double innerMouthMaxDepth = 5.0;
+  /// Base sizes in PNG pixel space before [scale] is applied.
+  static const double baseScleraWidth = 22.0;
+  static const double baseScleraHeight = 14.0;
+  static const double baseIrisRadius = 5.5;
+  static const double basePupilRadius = 2.8;
+  static const double baseHighlightRadius = 1.1;
+  static const double basePupilShiftPx = 4.0;
+  static const double baseMouthWidth = 26.0;
+  static const double baseMouthOpenWidth = 32.0;
+  static const double baseMouthOpenDepth = 10.0;
+  static const double baseInnerMouthWidth = 16.0;
+  static const double baseInnerMouthDepth = 7.0;
+  static const double baseLipStrokeWidth = 1.2;
 
-  final Offset leftEyeSocket;
-  final Offset rightEyeSocket;
+  final double scale;
+  final Offset leftEyeCenter;
+  final Offset rightEyeCenter;
   final Offset mouthCenter;
   final Offset pupilShift;
   final double blinkClosure;
   final double mouthVolume;
 
   const _ViolettaFaceOverlayPainter({
-    required this.leftEyeSocket,
-    required this.rightEyeSocket,
+    required this.scale,
+    required this.leftEyeCenter,
+    required this.rightEyeCenter,
     required this.mouthCenter,
     required this.pupilShift,
     required this.blinkClosure,
     required this.mouthVolume,
   });
 
+  double get _scleraWidth => baseScleraWidth * scale;
+  double get _scleraHeight => baseScleraHeight * scale;
+  double get _irisRadius => baseIrisRadius * scale;
+  double get _pupilRadius => basePupilRadius * scale;
+  double get _highlightRadius => baseHighlightRadius * scale;
+  double get _mouthWidth =>
+      lerpDouble(baseMouthWidth, baseMouthOpenWidth, mouthVolume)! * scale;
+  double get _mouthDepth => baseMouthOpenDepth * mouthVolume * scale;
+  double get _lipStrokeWidth => baseLipStrokeWidth * scale;
+
   @override
   void paint(Canvas canvas, Size size) {
     _paintMouth(canvas);
-    if (blinkClosure < 0.42) {
-      _paintPupils(canvas);
-    }
-    if (blinkClosure > 0.04) {
-      _paintBlinkLids(canvas);
-    }
+    _paintEyeStack(canvas, leftEyeCenter);
+    _paintEyeStack(canvas, rightEyeCenter);
   }
 
-  void _paintPupils(Canvas canvas) {
+  void _paintEyeStack(Canvas canvas, Offset center) {
+    final Rect scleraRect = Rect.fromCenter(
+      center: center,
+      width: _scleraWidth,
+      height: _scleraHeight,
+    );
+
+    final Paint scleraPaint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.fill;
+    canvas.drawOval(scleraRect, scleraPaint);
+
+    final Paint irisPaint = Paint()
+      ..color = const Color(0xFF5A3828)
+      ..style = PaintingStyle.fill;
     final Paint pupilPaint = Paint()
-      ..color = const Color(0xFF1A0E08)
+      ..color = const Color(0xFF120818)
       ..style = PaintingStyle.fill;
     final Paint highlightPaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.92)
+      ..color = Colors.white.withValues(alpha: 0.95)
       ..style = PaintingStyle.fill;
 
-    final Offset leftPupil = leftEyeSocket + pupilShift;
-    final Offset rightPupil = rightEyeSocket + pupilShift;
+    final Offset irisCenter = center + pupilShift;
+    canvas.drawCircle(irisCenter, _irisRadius, irisPaint);
+    canvas.drawCircle(irisCenter, _pupilRadius, pupilPaint);
+    canvas.drawCircle(
+      irisCenter + Offset(-0.9 * scale, -0.75 * scale),
+      _highlightRadius,
+      highlightPaint,
+    );
 
-    canvas.drawCircle(leftPupil, pupilRadius, pupilPaint);
-    canvas.drawCircle(rightPupil, pupilRadius, pupilPaint);
-    canvas.drawCircle(leftPupil, pupilHighlightRadius, highlightPaint);
-    canvas.drawCircle(rightPupil, pupilHighlightRadius, highlightPaint);
+    if (blinkClosure > 0.02) {
+      _paintFilledEyelid(canvas, scleraRect);
+    }
   }
 
-  void _paintBlinkLids(Canvas canvas) {
+  void _paintFilledEyelid(Canvas canvas, Rect eyeRect) {
     const Color lidColor = Color(0xFFC89472);
     final Paint lidPaint = Paint()
       ..color = lidColor
       ..style = PaintingStyle.fill;
 
-    for (final Offset socket in <Offset>[leftEyeSocket, rightEyeSocket]) {
-      final Rect eyeBox = Rect.fromCenter(
-        center: socket,
-        width: blinkEyeWidth,
-        height: blinkEyeHeight,
-      );
+    canvas.save();
+    canvas.clipPath(
+      Path()..addOval(eyeRect.inflate(0.6 * scale)),
+    );
 
-      canvas.save();
-      canvas.clipRRect(
-        RRect.fromRectAndRadius(
-          eyeBox.inflate(0.4),
-          Radius.circular(eyeBox.height * 0.85),
+    final double upperDrop = eyeRect.height * 0.95 * blinkClosure;
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTRB(
+          eyeRect.left - scale,
+          eyeRect.top - scale,
+          eyeRect.right + scale,
+          eyeRect.top + upperDrop,
         ),
+        Radius.elliptical(eyeRect.width * 0.28, eyeRect.height * 0.22),
+      ),
+      lidPaint,
+    );
+
+    if (blinkClosure > 0.55) {
+      final double lowerRise =
+          eyeRect.height * 0.75 * ((blinkClosure - 0.55) / 0.45).clamp(0.0, 1.0);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTRB(
+            eyeRect.left - scale,
+            eyeRect.bottom - lowerRise,
+            eyeRect.right + scale,
+            eyeRect.bottom + scale,
+          ),
+          Radius.elliptical(eyeRect.width * 0.28, eyeRect.height * 0.22),
+        ),
+        lidPaint,
       );
-
-      final double upperDrop = eyeBox.height * 0.9 * blinkClosure;
-      if (upperDrop > 0.2) {
-        canvas.drawRRect(
-          RRect.fromRectAndRadius(
-            Rect.fromLTRB(
-              eyeBox.left - 0.8,
-              eyeBox.top - 0.4,
-              eyeBox.right + 0.8,
-              eyeBox.top + upperDrop,
-            ),
-            Radius.elliptical(eyeBox.width * 0.32, eyeBox.height * 0.28),
-          ),
-          lidPaint,
-        );
-      }
-
-      if (blinkClosure > 0.58) {
-        final double lowerRise =
-            eyeBox.height * 0.65 * ((blinkClosure - 0.58) / 0.42).clamp(0.0, 1.0);
-        canvas.drawRRect(
-          RRect.fromRectAndRadius(
-            Rect.fromLTRB(
-              eyeBox.left - 0.8,
-              eyeBox.bottom - lowerRise,
-              eyeBox.right + 0.8,
-              eyeBox.bottom + 0.4,
-            ),
-            Radius.elliptical(eyeBox.width * 0.32, eyeBox.height * 0.28),
-          ),
-          lidPaint,
-        );
-      }
-
-      canvas.restore();
     }
+
+    canvas.restore();
   }
 
   void _paintMouth(Canvas canvas) {
-    final Path mouthPath = _buildMouthPath(mouthVolume);
+    final Path mouthPath = _buildMouthPath();
     final Paint lipLine = Paint()
       ..color = const Color(0xFF2A1018)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.1
+      ..strokeWidth = _lipStrokeWidth
       ..strokeCap = StrokeCap.round;
 
     if (mouthVolume <= 0.06) {
@@ -511,22 +511,22 @@ class _ViolettaFaceOverlayPainter extends CustomPainter {
       final Paint innerMouth = Paint()
         ..color = const Color(0xFF120812).withValues(alpha: 0.85)
         ..style = PaintingStyle.fill;
-      canvas.drawPath(_buildInnerMouthPath(mouthVolume), innerMouth);
+      canvas.drawPath(_buildInnerMouthPath(), innerMouth);
     }
   }
 
-  Path _buildMouthPath(double volume) {
+  Path _buildMouthPath() {
     final Offset center = mouthCenter;
-    final double width = lerpDouble(mouthClosedWidth, mouthOpenWidth, volume)!;
-    final double openDepth = lerpDouble(0.5, mouthOpenDepth, volume)!;
+    final double width = _mouthWidth;
+    final double openDepth = _mouthDepth;
     final double lipY = center.dy;
 
-    if (volume <= 0.06) {
+    if (mouthVolume <= 0.06) {
       return Path()
         ..moveTo(center.dx - width * 0.5, lipY)
         ..quadraticBezierTo(
           center.dx,
-          lipY + 0.9,
+          lipY + 0.35 * scale,
           center.dx + width * 0.5,
           lipY,
         );
@@ -535,25 +535,25 @@ class _ViolettaFaceOverlayPainter extends CustomPainter {
     final Path path = Path();
     path.moveTo(center.dx - width * 0.5, lipY);
     path.quadraticBezierTo(
-      center.dx - width * 0.12,
-      lipY - 0.35,
+      center.dx - width * 0.1,
+      lipY - 0.25 * scale,
       center.dx,
-      lipY - 0.2,
+      lipY - 0.12 * scale,
     );
     path.quadraticBezierTo(
-      center.dx + width * 0.12,
-      lipY - 0.35,
+      center.dx + width * 0.1,
+      lipY - 0.25 * scale,
       center.dx + width * 0.5,
       lipY,
     );
     path.quadraticBezierTo(
-      center.dx + width * 0.18,
+      center.dx + width * 0.16,
       lipY + openDepth * 0.55,
       center.dx,
       lipY + openDepth,
     );
     path.quadraticBezierTo(
-      center.dx - width * 0.18,
+      center.dx - width * 0.16,
       lipY + openDepth * 0.55,
       center.dx - width * 0.5,
       lipY,
@@ -562,10 +562,10 @@ class _ViolettaFaceOverlayPainter extends CustomPainter {
     return path;
   }
 
-  Path _buildInnerMouthPath(double volume) {
-    final Offset center = mouthCenter + Offset(0.0, 0.8 * volume);
-    final double depth = innerMouthMaxDepth * volume;
-    final double width = innerMouthMaxWidth * volume;
+  Path _buildInnerMouthPath() {
+    final Offset center = mouthCenter + Offset(0.0, 0.6 * scale * mouthVolume);
+    final double depth = baseInnerMouthDepth * mouthVolume * scale;
+    final double width = baseInnerMouthWidth * mouthVolume * scale;
     return Path()
       ..addOval(
         Rect.fromCenter(
@@ -578,7 +578,11 @@ class _ViolettaFaceOverlayPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _ViolettaFaceOverlayPainter oldDelegate) {
-    return oldDelegate.pupilShift != pupilShift ||
+    return oldDelegate.scale != scale ||
+        oldDelegate.leftEyeCenter != leftEyeCenter ||
+        oldDelegate.rightEyeCenter != rightEyeCenter ||
+        oldDelegate.mouthCenter != mouthCenter ||
+        oldDelegate.pupilShift != pupilShift ||
         oldDelegate.blinkClosure != blinkClosure ||
         oldDelegate.mouthVolume != mouthVolume;
   }
