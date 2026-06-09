@@ -5,8 +5,8 @@ class LocalUtilityFormatter {
   LocalUtilityFormatter._();
 
   static const List<String> timeKeywords = <String>[
-    'сколько время',
     'который час',
+    'сколько время',
     '지금 몇시',
     '몇 시',
     'время',
@@ -14,6 +14,7 @@ class LocalUtilityFormatter {
   ];
 
   static const List<String> dateKeywords = <String>[
+    'какая дата',
     'какой сегодня день',
     '몇 월',
     '몇 일',
@@ -21,6 +22,36 @@ class LocalUtilityFormatter {
     'дата',
     '날짜',
   ];
+
+  static const Set<String> exactTimePhrases = <String>{
+    'который час?',
+    'который час',
+    'сколько время?',
+    'сколько время',
+  };
+
+  static const Set<String> exactDatePhrases = <String>{
+    'какая дата?',
+    'какая дата',
+    'какой сегодня день?',
+    'какой сегодня день',
+  };
+
+  static bool matchesExactTimeQuery(String normalizedText) {
+    final String trimmed = normalizedText.trim();
+    if (exactTimePhrases.contains(trimmed)) {
+      return true;
+    }
+    return matchesTimeQuery(normalizedText);
+  }
+
+  static bool matchesExactDateQuery(String normalizedText) {
+    final String trimmed = normalizedText.trim();
+    if (exactDatePhrases.contains(trimmed)) {
+      return true;
+    }
+    return matchesDateQuery(normalizedText);
+  }
 
   static const List<String> _ruWeekdays = <String>[
     'понедельник',

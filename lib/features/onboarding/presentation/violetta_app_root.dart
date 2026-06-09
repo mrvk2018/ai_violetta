@@ -15,6 +15,9 @@ class ViolettaAppRoot extends StatefulWidget {
 }
 
 class _ViolettaAppRootState extends State<ViolettaAppRoot> {
+  /// TEMP: skip onboarding/HUD and open avatar debug on web until Windows toolchain is ready.
+  static const bool _kTempLaunchAvatarDebug = true;
+
   final OnboardingVaultRepository _onboardingVault = OnboardingVaultRepository();
   late final ViolettaLocaleController _localeController;
 
@@ -70,13 +73,15 @@ class _ViolettaAppRootState extends State<ViolettaAppRoot> {
           return MaterialApp(
             debugShowCheckedModeBanner: false,
             locale: _localeController.flutterLocale,
-            home: _showOnboarding
-                ? ViolettaOnboardingWizard(
-                    vault: _onboardingVault,
-                    localeController: _localeController,
-                    onCompleted: _completeOnboarding,
-                  )
-                : const HudMainScreen(),
+            home: _kTempLaunchAvatarDebug
+                ? const ViolettaDebugScreen()
+                : _showOnboarding
+                    ? ViolettaOnboardingWizard(
+                        vault: _onboardingVault,
+                        localeController: _localeController,
+                        onCompleted: _completeOnboarding,
+                      )
+                    : const HudMainScreen(),
             routes: <String, WidgetBuilder>{
               if (kDebugMode) '/avatar-debug': (_) => const ViolettaDebugScreen(),
             },

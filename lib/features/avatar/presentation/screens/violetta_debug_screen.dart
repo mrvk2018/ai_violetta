@@ -5,8 +5,9 @@ import 'dart:ui' show lerpDouble;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:violetta_app/core/graphics/violetta_3d_render_engine.dart';
 import 'package:violetta_app/core/presentation/layout/responsive_layout_info.dart';
-import 'package:violetta_app/features/avatar/presentation/widgets/violetta_3d_render_engine.dart';
+import 'package:violetta_app/features/assistant/application/violetta_command_service.dart';
 
 /// Interactive desktop-oriented debug HUD for tuning the 2.5D avatar render engine.
 class ViolettaDebugScreen extends StatefulWidget {
@@ -38,6 +39,12 @@ class _ViolettaDebugScreenState extends State<ViolettaDebugScreen>
   double _leftArmAngle = 0.0;
   double _rightArmAngle = 0.0;
   bool _simulateSpeech = false;
+  bool _isUtilityQueryRunning = false;
+  String _utilityResponseText = '';
+  String? _utilityErrorText;
+
+  final TextEditingController _utilityInputController = TextEditingController();
+  final ViolettaCommandService _commandService = ViolettaCommandService();
 
   Timer? _speechSimulationTimer;
   Ticker? _lookAtTicker;
@@ -53,6 +60,7 @@ class _ViolettaDebugScreenState extends State<ViolettaDebugScreen>
   void dispose() {
     _speechSimulationTimer?.cancel();
     _lookAtTicker?.dispose();
+    _utilityInputController.dispose();
     super.dispose();
   }
 
@@ -78,13 +86,67 @@ class _ViolettaDebugScreenState extends State<ViolettaDebugScreen>
       return;
     }
 
-    final double normalizedX =
-        ((localPosition.dx / canvasSize.width) * 2.0 - 1.0).clamp(-1.0, 1.0);
-    final double normalizedY =
-        ((localPosition.dy / canvasSize.height) * 2.0 - 1.0).clamp(-1.0, 1.0);
+    final Offset canvasCenter = Offset(
+      canvasSize.width * 0.5,
+      canvasSize.height * 0.5,
+    );
+    const Size avatarBox = Violetta3DRenderEngine.canvasSize;
+    final Offset avatarTopLeft = canvasCenter -
+        Offset(avatarBox.width * 0.5, avatarBox.height * 0.5);
+    final Offset pointerInAvatar = localPosition - avatarTopLeft;
+    final Offset lookAt =
+        Violetta3DRenderEngine.lookAtFromAvatarPointer(pointerInAvatar);
 
-    _targetLookAtX = normalizedX;
-    _targetLookAtY = normalizedY;
+    _targetLookAtX = lookAt.dx;
+    _targetLookAtY = lookAt.dy;
+  }
+
+  Future<void> _submitUtilityQuery() async {
+    final String query = _utilityInputController.text.trim();
+    if (query.isEmpty || _isUtilityQueryRunning) {
+      return;
+    }
+
+    setState(() {
+      _isUtilityQueryRunning = true;
+      _utilityErrorText = null;
+      _utilityResponseText = '';
+    });
+
+    try {
+      final ViolettaIncomingSttResult result =
+          await _commandService.processIncomingSTT(query);
+      if (!mounted) {
+        return;
+      }
+      if (result.handled) {
+        setState(() {
+          _utilityResponseText = result.displayText;
+        });
+        debugPrint('[avatar-debug] utility_query="$query"');
+        debugPrint('[avatar-debug] utility_response="${result.displayText}"');
+      } else {
+        setState(() {
+          _utilityErrorText =
+              'Локальный парсер не распознал команду. Попробуйте «Который час?» или «Какая дата?».';
+        });
+        debugPrint('[avatar-debug] utility_unhandled="$query"');
+      }
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _utilityErrorText = 'Ошибка парсера: $error';
+      });
+      debugPrint('[avatar-debug] utility_error="$error"');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isUtilityQueryRunning = false;
+        });
+      }
+    }
   }
 
   void _setSimulateSpeech(bool enabled) {
@@ -231,11 +293,6 @@ class _ViolettaDebugScreenState extends State<ViolettaDebugScreen>
         );
         _canvasSize = canvasSize;
 
-        final double avatarSize = math.min(
-          canvasSize.width * 0.82,
-          canvasSize.height * 0.88,
-        ).clamp(160.0, 520.0);
-
         return MouseRegion(
           onHover: (PointerHoverEvent event) {
             _updateLookTarget(event.localPosition, canvasSize);
@@ -262,16 +319,12 @@ class _ViolettaDebugScreenState extends State<ViolettaDebugScreen>
                 children: <Widget>[
                   _buildCanvasGrid(canvasSize),
                   Center(
-                    child: SizedBox(
-                      width: avatarSize,
-                      height: avatarSize,
-                      child: Violetta3DRenderEngine(
-                        lookAtX: _lookAtX,
-                        lookAtY: _lookAtY,
-                        leftArmAngle: _leftArmAngle,
-                        rightArmAngle: _rightArmAngle,
-                        mouthVolume: _mouthVolume,
-                      ),
+                    child: Violetta3DRenderEngine(
+                      lookAtX: _lookAtX,
+                      lookAtY: _lookAtY,
+                      leftArmAngle: _leftArmAngle,
+                      rightArmAngle: _rightArmAngle,
+                      mouthVolume: _mouthVolume,
                     ),
                   ),
                   _buildCanvasTelemetry(),
@@ -377,7 +430,7 @@ class _ViolettaDebugScreenState extends State<ViolettaDebugScreen>
             ),
             const SizedBox(height: 14),
             _buildSliderControl(
-              label: 'leftArmAngle (rad)',
+              label: 'leftArmAngle (rad) [stub]',
               value: _leftArmAngle,
               min: _armAngleMin,
               max: _armAngleMax,
@@ -387,11 +440,12 @@ class _ViolettaDebugScreenState extends State<ViolettaDebugScreen>
                 setState(() {
                   _leftArmAngle = value;
                 });
+                debugPrint('[avatar-debug] leftArmAngle=${value.toStringAsFixed(3)} (not applied)');
               },
             ),
             const SizedBox(height: 14),
             _buildSliderControl(
-              label: 'rightArmAngle (rad)',
+              label: 'rightArmAngle (rad) [stub]',
               value: _rightArmAngle,
               min: _armAngleMin,
               max: _armAngleMax,
@@ -401,12 +455,15 @@ class _ViolettaDebugScreenState extends State<ViolettaDebugScreen>
                 setState(() {
                   _rightArmAngle = value;
                 });
+                debugPrint('[avatar-debug] rightArmAngle=${value.toStringAsFixed(3)} (not applied)');
               },
             ),
             const SizedBox(height: 18),
             _buildSpeechSimulationSwitch(),
             const SizedBox(height: 16),
             _buildResetButton(),
+            const SizedBox(height: 18),
+            _buildUtilityCommandPanel(),
           ],
         ),
       ),
@@ -518,6 +575,9 @@ class _ViolettaDebugScreenState extends State<ViolettaDebugScreen>
           _leftArmAngle = 0.0;
           _rightArmAngle = 0.0;
           _simulateSpeech = false;
+          _utilityResponseText = '';
+          _utilityErrorText = null;
+          _utilityInputController.clear();
         });
       },
       style: OutlinedButton.styleFrom(
@@ -526,6 +586,101 @@ class _ViolettaDebugScreenState extends State<ViolettaDebugScreen>
       ),
       icon: const Icon(Icons.restart_alt_rounded, size: 18),
       label: const Text('Reset Debug State'),
+    );
+  }
+
+  Widget _buildUtilityCommandPanel() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text(
+          'Local Utility Parser',
+          style: TextStyle(
+            color: _neonPink,
+            fontWeight: FontWeight.w700,
+            fontSize: 13,
+          ),
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _utilityInputController,
+          enabled: !_isUtilityQueryRunning,
+          style: const TextStyle(color: Colors.white),
+          decoration: InputDecoration(
+            hintText: 'Который час?',
+            hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.35)),
+            filled: true,
+            fillColor: Colors.black.withValues(alpha: 0.28),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide(color: _neonCyan.withValues(alpha: 0.35)),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide(color: _neonCyan.withValues(alpha: 0.35)),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide(color: _neonCyan.withValues(alpha: 0.85)),
+            ),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          ),
+          textInputAction: TextInputAction.send,
+          onSubmitted: (_) => _submitUtilityQuery(),
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: _isUtilityQueryRunning ? null : _submitUtilityQuery,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _neonPink.withValues(alpha: 0.88),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+            icon: _isUtilityQueryRunning
+                ? SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white.withValues(alpha: 0.9),
+                    ),
+                  )
+                : const Icon(Icons.send_rounded, size: 18),
+            label: Text(_isUtilityQueryRunning ? 'Обработка...' : 'Отправить'),
+          ),
+        ),
+        if (_utilityResponseText.isNotEmpty) ...<Widget>[
+          const SizedBox(height: 10),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.32),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: _neonCyan.withValues(alpha: 0.45)),
+            ),
+            child: Text(
+              _utilityResponseText,
+              style: const TextStyle(color: Colors.white, fontSize: 12.5),
+            ),
+          ),
+        ],
+        if (_utilityErrorText != null) ...<Widget>[
+          const SizedBox(height: 10),
+          Text(
+            _utilityErrorText!,
+            style: TextStyle(
+              color: Colors.orangeAccent.withValues(alpha: 0.95),
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ],
     );
   }
 }

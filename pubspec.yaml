@@ -80,6 +80,7 @@ flutter:
     - assets/avatar/violetta_body.png
     - assets/avatar/left_arm.png
     - assets/avatar/right_arm.png
+    - assets/violetta_bodyfull.png
 
   # To add assets to your application, add an assets section, like this:
   # assets:

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:violetta_app/core/platform/violetta_desktop_test_host.dart';
 import 'package:violetta_app/features/onboarding/application/violetta_locale_controller.dart';
 import 'package:violetta_app/features/onboarding/data/repositories/onboarding_vault_repository.dart';
 import 'package:violetta_app/features/onboarding/domain/models/violetta_app_locale.dart';
@@ -98,6 +99,18 @@ class _ViolettaOnboardingWizardState extends State<ViolettaOnboardingWizard>
   OnboardingCopy get _copy => OnboardingCopy(widget.localeController.locale);
 
   Future<void> _refreshPermissionStates() async {
+    if (violettaBypassNativePermissions) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _cameraGranted = true;
+        _microphoneGranted = true;
+        _accessibilityEnabled = true;
+      });
+      return;
+    }
+
     final bool cameraGranted = await Permission.camera.isGranted;
     final bool microphoneGranted = await Permission.microphone.isGranted;
     final bool accessibilityEnabled =
@@ -154,7 +167,8 @@ class _ViolettaOnboardingWizardState extends State<ViolettaOnboardingWizard>
   }
 
   bool get _canFinish =>
-      _cameraGranted && _microphoneGranted && _accessibilityEnabled;
+      violettaBypassNativePermissions ||
+      (_cameraGranted && _microphoneGranted && _accessibilityEnabled);
 
   @override
   Widget build(BuildContext context) {
