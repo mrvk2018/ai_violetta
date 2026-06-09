@@ -348,17 +348,6 @@ class _Violetta3DRenderEngineState extends State<Violetta3DRenderEngine>
 }
 
 class _ViolettaFaceOverlayPainter extends CustomPainter {
-  static const double baseScleraWidth = 22.0;
-  static const double baseScleraHeight = 14.0;
-  static const double basePupilRadius = 5.0;
-  static const double basePupilShiftPx = 4.0;
-  static const double baseMouthWidth = 24.0;
-  static const double baseMouthOpenWidth = 30.0;
-  static const double baseMouthOpenDepth = 9.0;
-  static const double baseInnerMouthWidth = 14.0;
-  static const double baseInnerMouthDepth = 6.0;
-  static const double baseLipStrokeWidth = 1.2;
-
   final double lookAtX;
   final double lookAtY;
   final double blinkClosure;
@@ -377,222 +366,175 @@ class _ViolettaFaceOverlayPainter extends CustomPainter {
       return;
     }
 
-    final _SpriteDrawBox drawBox = _SpriteDrawBox.fromCanvasSize(size);
-    final double currentScale = drawBox.currentScale;
+    // 1. Жесткий расчет Bounding Box картинки 375x666 внутри холста (BoxFit.contain)
+    const double imageWidth = 375.0;
+    const double imageHeight = 666.0;
+    const double imageAspectRatio = imageWidth / imageHeight;
+    final double canvasAspectRatio = size.width / size.height;
 
-    final Offset leftEyeCenter =
-        drawBox.landmark(Violetta3DRenderEngine.leftEyeNorm);
-    final Offset rightEyeCenter =
-        drawBox.landmark(Violetta3DRenderEngine.rightEyeNorm);
-    final Offset mouthCenter =
-        drawBox.landmark(Violetta3DRenderEngine.mouthNorm);
+    final double drawWidth;
+    final double drawHeight;
+    final double offsetX;
+    final double offsetY;
 
-    final double maxShift = basePupilShiftPx * currentScale;
-    final Offset pupilShift = _clampPupilShift(lookAtX, lookAtY, maxShift);
-
-    _paintMouth(canvas, mouthCenter, currentScale);
-    _paintEyeStack(canvas, leftEyeCenter, pupilShift, currentScale);
-    _paintEyeStack(canvas, rightEyeCenter, pupilShift, currentScale);
-  }
-
-  Offset _clampPupilShift(double lookAtX, double lookAtY, double maxShiftPx) {
-    final Offset raw = Offset(lookAtX * maxShiftPx, lookAtY * maxShiftPx);
-    if (raw.distance <= maxShiftPx) {
-      return raw;
+    if (canvasAspectRatio > imageAspectRatio) {
+      drawHeight = size.height;
+      drawWidth = drawHeight * imageAspectRatio;
+      offsetX = (size.width - drawWidth) / 2.0;
+      offsetY = 0.0;
+    } else {
+      drawWidth = size.width;
+      drawHeight = drawWidth / imageAspectRatio;
+      offsetX = 0.0;
+      offsetY = (size.height - drawHeight) / 2.0;
     }
-    return Offset.fromDirection(raw.direction, maxShiftPx);
-  }
 
-  void _paintEyeStack(
-    Canvas canvas,
-    Offset center,
-    Offset pupilShift,
-    double currentScale,
-  ) {
-    final double scleraWidth = baseScleraWidth * currentScale;
-    final double scleraHeight = baseScleraHeight * currentScale;
-    final double pupilRadius = basePupilRadius * currentScale;
+    // Глобальный коэффициент масштабирования элементов лица
+    final double scale = drawHeight / imageHeight;
 
-    final Rect scleraRect = Rect.fromCenter(
-      center: center,
-      width: scleraWidth,
-      height: scleraHeight,
-    );
+    // 2. Истинные нормализованные координаты landmarks из попиксельного анализа PNG
+    const double leftEyeNormX = 148.96 / 375.0;
+    const double leftEyeNormY = 175.45 / 666.0;
 
-    final Paint scleraPaint = Paint()
+    const double rightEyeNormX = 177.58 / 375.0;
+    const double rightEyeNormY = 178.87 / 666.0;
+
+    const double mouthNormX = 181.46 / 375.0;
+    const double mouthNormY = 206.38 / 666.0;
+
+    // 3. Вычисление финальных точек на экране
+    final double leftEyeX = offsetX + (leftEyeNormX * drawWidth);
+    final double leftEyeY = offsetY + (leftEyeNormY * drawHeight);
+
+    final double rightEyeX = offsetX + (rightEyeNormX * drawWidth);
+    final double rightEyeY = offsetY + (rightEyeNormY * drawHeight);
+
+    final double mouthX = offsetX + (mouthNormX * drawWidth);
+    final double mouthY = offsetY + (mouthNormY * drawHeight);
+
+    // 4. Отрисовка ГЛАЗ (многослойная, аккуратного аниме-масштаба)
+    final Paint eyeBasePaint = Paint()
       ..color = Colors.white
       ..style = PaintingStyle.fill;
-    canvas.drawOval(scleraRect, scleraPaint);
-
-    final Paint irisPaint = Paint()
-      ..color = const Color(0xFF5A3828)
-      ..style = PaintingStyle.fill;
     final Paint pupilPaint = Paint()
-      ..color = const Color(0xFF120818)
+      ..color = const Color(0xFF3D2A1C)
       ..style = PaintingStyle.fill;
-    final Paint highlightPaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.95)
-      ..style = PaintingStyle.fill;
-
-    final Offset irisCenter = center + pupilShift;
-    canvas.drawCircle(irisCenter, pupilRadius, irisPaint);
-    canvas.drawCircle(irisCenter, pupilRadius * 0.55, pupilPaint);
-    canvas.drawCircle(
-      irisCenter + Offset(-0.8 * currentScale, -0.65 * currentScale),
-      pupilRadius * 0.22,
-      highlightPaint,
-    );
-
-    if (blinkClosure > 0.02) {
-      _paintFilledEyelid(canvas, scleraRect, currentScale);
-    }
-  }
-
-  void _paintFilledEyelid(
-    Canvas canvas,
-    Rect eyeRect,
-    double currentScale,
-  ) {
-    const Color lidColor = Color(0xFFC89472);
-    final Paint lidPaint = Paint()
-      ..color = lidColor
+    final Paint skinPaint = Paint()
+      ..color = const Color(0xFFC89472)
       ..style = PaintingStyle.fill;
 
-    canvas.save();
-    canvas.clipPath(
-      Path()..addOval(eyeRect.inflate(0.5 * currentScale)),
-    );
+    final double eyeRadiusX = 11.0 * scale;
+    final double eyeRadiusY = 7.0 * scale;
+    final double pupilRadius = 4.0 * scale;
 
-    final double upperDrop = eyeRect.height * 0.95 * blinkClosure;
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTRB(
-          eyeRect.left - currentScale,
-          eyeRect.top - currentScale,
-          eyeRect.right + currentScale,
-          eyeRect.top + upperDrop,
-        ),
-        Radius.elliptical(eyeRect.width * 0.28, eyeRect.height * 0.22),
+    final Offset leftEyeCenter = Offset(leftEyeX, leftEyeY);
+    final Offset rightEyeCenter = Offset(rightEyeX, rightEyeY);
+
+    canvas.drawOval(
+      Rect.fromCenter(
+        center: leftEyeCenter,
+        width: eyeRadiusX * 2,
+        height: eyeRadiusY * 2,
       ),
-      lidPaint,
+      eyeBasePaint,
+    );
+    canvas.drawOval(
+      Rect.fromCenter(
+        center: rightEyeCenter,
+        width: eyeRadiusX * 2,
+        height: eyeRadiusY * 2,
+      ),
+      eyeBasePaint,
     );
 
-    if (blinkClosure > 0.55) {
-      final double lowerRise = eyeRect.height *
-          0.75 *
-          ((blinkClosure - 0.55) / 0.45).clamp(0.0, 1.0);
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTRB(
-            eyeRect.left - currentScale,
-            eyeRect.bottom - lowerRise,
-            eyeRect.right + currentScale,
-            eyeRect.bottom + currentScale,
-          ),
-          Radius.elliptical(eyeRect.width * 0.28, eyeRect.height * 0.22),
+    final Offset leftPupil = _clampPupilToEye(
+      leftEyeCenter,
+      Offset(leftEyeX + lookAtX * 3.0 * scale, leftEyeY + lookAtY * 2.0 * scale),
+      eyeRadiusX * 0.45,
+      eyeRadiusY * 0.35,
+    );
+    final Offset rightPupil = _clampPupilToEye(
+      rightEyeCenter,
+      Offset(
+        rightEyeX + lookAtX * 3.0 * scale,
+        rightEyeY + lookAtY * 2.0 * scale,
+      ),
+      eyeRadiusX * 0.45,
+      eyeRadiusY * 0.35,
+    );
+
+    canvas.drawCircle(leftPupil, pupilRadius, pupilPaint);
+    canvas.drawCircle(rightPupil, pupilRadius, pupilPaint);
+
+    // 5. Анимация МОРГАНИЯ (веко закрывает глаз сверху вниз)
+    if (blinkClosure > 0.0) {
+      final double lidHeight = eyeRadiusY * 2 * blinkClosure;
+      canvas.drawRect(
+        Rect.fromLTWH(
+          leftEyeX - eyeRadiusX,
+          leftEyeY - eyeRadiusY,
+          eyeRadiusX * 2,
+          lidHeight,
         ),
-        lidPaint,
+        skinPaint,
+      );
+      canvas.drawRect(
+        Rect.fromLTWH(
+          rightEyeX - eyeRadiusX,
+          rightEyeY - eyeRadiusY,
+          eyeRadiusX * 2,
+          lidHeight,
+        ),
+        skinPaint,
       );
     }
 
-    canvas.restore();
-  }
-
-  void _paintMouth(Canvas canvas, Offset mouthCenter, double currentScale) {
-    final Path mouthPath = _buildMouthPath(mouthCenter, currentScale);
-    final Paint lipLine = Paint()
-      ..color = const Color(0xFF2A1018)
+    // 6. Отрисовка РТА (аккуратная линия строго на губах текстуры)
+    final Paint mouthPaint = Paint()
+      ..color = Colors.black
       ..style = PaintingStyle.stroke
-      ..strokeWidth = baseLipStrokeWidth * currentScale
+      ..strokeWidth = 2.0 * scale
       ..strokeCap = StrokeCap.round;
 
-    if (mouthVolume <= 0.06) {
-      canvas.drawPath(mouthPath, lipLine);
-      return;
-    }
+    final double mouthWidth = 14.0 * scale;
+    final double mouthOpenHeight = 8.0 * scale * mouthVolume;
 
-    final Paint lipFill = Paint()
-      ..color = const Color(0xFF6A3048)
-      ..style = PaintingStyle.fill;
-
-    canvas.drawPath(mouthPath, lipFill);
-    canvas.drawPath(mouthPath, lipLine);
-
-    if (mouthVolume > 0.08) {
-      final Paint innerMouth = Paint()
-        ..color = const Color(0xFF120812).withValues(alpha: 0.85)
-        ..style = PaintingStyle.fill;
-      canvas.drawPath(
-        _buildInnerMouthPath(mouthCenter, currentScale),
-        innerMouth,
+    if (mouthVolume < 0.1) {
+      canvas.drawLine(
+        Offset(mouthX - mouthWidth / 2, mouthY),
+        Offset(mouthX + mouthWidth / 2, mouthY),
+        mouthPaint,
       );
-    }
-  }
-
-  Path _buildMouthPath(Offset mouthCenter, double currentScale) {
-    final double width = lerpDouble(
-          baseMouthWidth,
-          baseMouthOpenWidth,
-          mouthVolume,
-        )! *
-        currentScale;
-    final double openDepth = baseMouthOpenDepth * mouthVolume * currentScale;
-    final double lipY = mouthCenter.dy;
-
-    if (mouthVolume <= 0.06) {
-      return Path()
-        ..moveTo(mouthCenter.dx - width * 0.5, lipY)
+    } else {
+      final Path mouthPath = Path()
+        ..moveTo(mouthX - mouthWidth / 2, mouthY)
         ..quadraticBezierTo(
-          mouthCenter.dx,
-          lipY + 0.35 * currentScale,
-          mouthCenter.dx + width * 0.5,
-          lipY,
+          mouthX,
+          mouthY + mouthOpenHeight,
+          mouthX + mouthWidth / 2,
+          mouthY,
         );
+      canvas.drawPath(mouthPath, mouthPaint);
     }
 
-    final Path path = Path();
-    path.moveTo(mouthCenter.dx - width * 0.5, lipY);
-    path.quadraticBezierTo(
-      mouthCenter.dx - width * 0.1,
-      lipY - 0.25 * currentScale,
-      mouthCenter.dx,
-      lipY - 0.12 * currentScale,
-    );
-    path.quadraticBezierTo(
-      mouthCenter.dx + width * 0.1,
-      lipY - 0.25 * currentScale,
-      mouthCenter.dx + width * 0.5,
-      lipY,
-    );
-    path.quadraticBezierTo(
-      mouthCenter.dx + width * 0.16,
-      lipY + openDepth * 0.55,
-      mouthCenter.dx,
-      lipY + openDepth,
-    );
-    path.quadraticBezierTo(
-      mouthCenter.dx - width * 0.16,
-      lipY + openDepth * 0.55,
-      mouthCenter.dx - width * 0.5,
-      lipY,
-    );
-    path.close();
-    return path;
+    // 7. Debug-точки (HUD визуальный контроль)
+    final Paint debugPaint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(leftEyeCenter, 2.0, debugPaint);
+    canvas.drawCircle(rightEyeCenter, 2.0, debugPaint);
+    canvas.drawCircle(Offset(mouthX, mouthY), 2.0, debugPaint);
   }
 
-  Path _buildInnerMouthPath(Offset mouthCenter, double currentScale) {
-    final Offset center =
-        mouthCenter + Offset(0.0, 0.6 * currentScale * mouthVolume);
-    final double depth = baseInnerMouthDepth * mouthVolume * currentScale;
-    final double width = baseInnerMouthWidth * mouthVolume * currentScale;
-    return Path()
-      ..addOval(
-        Rect.fromCenter(
-          center: center,
-          width: width,
-          height: depth,
-        ),
-      );
+  Offset _clampPupilToEye(
+    Offset eyeCenter,
+    Offset target,
+    double maxShiftX,
+    double maxShiftY,
+  ) {
+    final double dx = (target.dx - eyeCenter.dx).clamp(-maxShiftX, maxShiftX);
+    final double dy = (target.dy - eyeCenter.dy).clamp(-maxShiftY, maxShiftY);
+    return Offset(eyeCenter.dx + dx, eyeCenter.dy + dy);
   }
 
   @override
