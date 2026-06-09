@@ -7,7 +7,7 @@ void main() {
 
   setUp(ViolettaFaceLandmarkDetector.resetForTest);
 
-  test('color cluster detector finds red eyes and blue mouth markup', () async {
+  test('strict raw-byte scan finds red eyes and blue mouth markup', () async {
     await ViolettaFaceLandmarkDetector.ensureInitialized();
 
     expect(Violetta3DRenderEngine.landmarksDetected, isTrue);
@@ -19,13 +19,12 @@ void main() {
     // ignore: avoid_print
     print('detected leftEyeNorm=$left rightEyeNorm=$right mouthNorm=$mouth');
 
-    expect(left.dx, greaterThan(0.0));
-    expect(left.dx, lessThan(0.5));
-    expect(right.dx, greaterThan(left.dx));
-    expect(right.dx, lessThan(1.0));
-    expect(mouth.dy, greaterThan(left.dy));
-    expect(mouth.dx, greaterThan(left.dx));
-    expect(mouth.dx, lessThan(right.dx + 0.15));
+    expect(left.dx, closeTo(157.0 / 375.0, 0.02));
+    expect(left.dy, closeTo(192.0 / 666.0, 0.02));
+    expect(right.dx, closeTo(177.0 / 375.0, 0.02));
+    expect(right.dy, closeTo(195.0 / 666.0, 0.02));
+    expect(mouth.dx, closeTo(167.0 / 375.0, 0.02));
+    expect(mouth.dy, closeTo(209.0 / 666.0, 0.02));
   });
 
   test('detected norms map to rig centers inside imageRect', () async {

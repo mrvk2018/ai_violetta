@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:typed_data';
 import 'dart:ui' as ui show Codec, Image, ImageByteFormat, instantiateImageCodec;
 import 'dart:ui' show lerpDouble;
 
@@ -108,17 +107,18 @@ class ViolettaFaceLandmarkDetector {
       assetBytes.buffer.asUint8List(),
     );
     final ui.Image image = (await codec.getNextFrame()).image;
-
-    final int imageWidth = image.width;
-    final int imageHeight = image.height;
     final ByteData? rawRgba = await image.toByteData(
       format: ui.ImageByteFormat.rawRgba,
     );
+
+    final int imageWidth = image.width;
+    final int imageHeight = image.height;
     image.dispose();
 
     if (rawRgba == null) {
       debugPrint(
-        'ViolettaFaceLandmarkDetector: failed to read RGBA bytes — using fallback norms',
+        'Asset Scan Failed: unable to read raw RGBA bytes from '
+        '${Violetta3DRenderEngine.bodyAsset}',
       );
       return;
     }
@@ -133,9 +133,9 @@ class ViolettaFaceLandmarkDetector {
         final int green = rawRgba.getUint8(index + 1);
         final int blue = rawRgba.getUint8(index + 2);
 
-        if (red > 200 && green < 50 && blue < 50) {
+        if (red > 230 && green < 25 && blue < 25) {
           redPixels.add(Offset(x.toDouble(), y.toDouble()));
-        } else if (red < 50 && green < 50 && blue > 200) {
+        } else if (blue > 230 && red < 25 && green < 25) {
           bluePixels.add(Offset(x.toDouble(), y.toDouble()));
         }
       }
@@ -143,8 +143,8 @@ class ViolettaFaceLandmarkDetector {
 
     if (redPixels.isEmpty || bluePixels.isEmpty) {
       debugPrint(
-        'ViolettaFaceLandmarkDetector: markup not found '
-        '(red=${redPixels.length}, blue=${bluePixels.length}) — using fallback norms',
+        'Asset Scan Failed: color markup not found on ${imageWidth}x$imageHeight '
+        '(red=${redPixels.length}, blue=${bluePixels.length})',
       );
       return;
     }
@@ -155,25 +155,27 @@ class ViolettaFaceLandmarkDetector {
 
     if (leftCluster.isEmpty || rightCluster.isEmpty) {
       debugPrint(
-        'ViolettaFaceLandmarkDetector: could not split eye clusters — using fallback norms',
+        'Asset Scan Failed: could not split red eye clusters '
+        '(left=${leftCluster.length}, right=${rightCluster.length})',
       );
       return;
     }
 
-    final Offset leftEyeNorm = _normalizedCentroid(
-      leftCluster,
-      imageWidth,
-      imageHeight,
+    final Offset leftEyePx = _pixelCentroid(leftCluster);
+    final Offset rightEyePx = _pixelCentroid(rightCluster);
+    final Offset mouthPx = _pixelCentroid(bluePixels);
+
+    final Offset leftEyeNorm = Offset(
+      leftEyePx.dx / imageWidth,
+      leftEyePx.dy / imageHeight,
     );
-    final Offset rightEyeNorm = _normalizedCentroid(
-      rightCluster,
-      imageWidth,
-      imageHeight,
+    final Offset rightEyeNorm = Offset(
+      rightEyePx.dx / imageWidth,
+      rightEyePx.dy / imageHeight,
     );
-    final Offset mouthNorm = _normalizedCentroid(
-      bluePixels,
-      imageWidth,
-      imageHeight,
+    final Offset mouthNorm = Offset(
+      mouthPx.dx / imageWidth,
+      mouthPx.dy / imageHeight,
     );
 
     Violetta3DRenderEngine.applyDetectedLandmarks(
@@ -183,18 +185,44 @@ class ViolettaFaceLandmarkDetector {
     );
 
     debugPrint(
-      'ViolettaFaceLandmarkDetector: scan complete '
-      '(${imageWidth}x$imageHeight, red=${redPixels.length}, blue=${bluePixels.length})',
+      'Asset Scan Success (${imageWidth}x$imageHeight): '
+      'red=${redPixels.length}, blue=${bluePixels.length}',
     );
     debugPrint(
-      '  leftEyeNorm=(${leftEyeNorm.dx.toStringAsFixed(4)}, ${leftEyeNorm.dy.toStringAsFixed(4)})',
+      'Asset Scan Success: Left Eye at '
+      '${leftEyePx.dx.toStringAsFixed(1)}, ${leftEyePx.dy.toStringAsFixed(1)}',
     );
     debugPrint(
-      '  rightEyeNorm=(${rightEyeNorm.dx.toStringAsFixed(4)}, ${rightEyeNorm.dy.toStringAsFixed(4)})',
+      'Asset Scan Success: Right Eye at '
+      '${rightEyePx.dx.toStringAsFixed(1)}, ${rightEyePx.dy.toStringAsFixed(1)}',
     );
     debugPrint(
-      '  mouthNorm=(${mouthNorm.dx.toStringAsFixed(4)}, ${mouthNorm.dy.toStringAsFixed(4)})',
+      'Asset Scan Success: Mouth at '
+      '${mouthPx.dx.toStringAsFixed(1)}, ${mouthPx.dy.toStringAsFixed(1)}',
     );
+    debugPrint(
+      'Asset Scan Success: leftEyeNorm='
+      '(${leftEyeNorm.dx.toStringAsFixed(4)}, ${leftEyeNorm.dy.toStringAsFixed(4)})',
+    );
+    debugPrint(
+      'Asset Scan Success: rightEyeNorm='
+      '(${rightEyeNorm.dx.toStringAsFixed(4)}, ${rightEyeNorm.dy.toStringAsFixed(4)})',
+    );
+    debugPrint(
+      'Asset Scan Success: mouthNorm='
+      '(${mouthNorm.dx.toStringAsFixed(4)}, ${mouthNorm.dy.toStringAsFixed(4)})',
+    );
+  }
+
+  static Offset _pixelCentroid(List<Offset> pixels) {
+    double sumX = 0.0;
+    double sumY = 0.0;
+    for (final Offset pixel in pixels) {
+      sumX += pixel.dx;
+      sumY += pixel.dy;
+    }
+    final double count = pixels.length.toDouble();
+    return Offset(sumX / count, sumY / count);
   }
 
   static List<List<Offset>> _splitRedEyeClusters(List<Offset> redPixels) {
@@ -214,20 +242,6 @@ class ViolettaFaceLandmarkDetector {
     return <List<Offset>>[leftCluster, rightCluster];
   }
 
-  static Offset _normalizedCentroid(
-    List<Offset> pixels,
-    int imageWidth,
-    int imageHeight,
-  ) {
-    double sumX = 0.0;
-    double sumY = 0.0;
-    for (final Offset pixel in pixels) {
-      sumX += pixel.dx;
-      sumY += pixel.dy;
-    }
-    final double count = pixels.length.toDouble();
-    return Offset(sumX / count / imageWidth, sumY / count / imageHeight);
-  }
 }
 
 /// BoxFit.contain layout for the sprite inside a canvas [Size].
