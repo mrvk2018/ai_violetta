@@ -568,8 +568,23 @@ class _ViolettaFaceOverlayPainter extends CustomPainter {
 
     final double eyeRadiusX = 2.5 * currentScale;
     final double eyeRadiusY = 1.6 * currentScale;
-    final double pupilRadius = 1.0 * currentScale;
-    final double mouthWidth = 12.0 * currentScale;
+    final double pupilRadius = 2.2 * currentScale;
+    final double mouthWidth = 7.0 * currentScale;
+
+    final double maxShiftX = 1.5 * currentScale;
+    final double maxShiftY = 1.0 * currentScale;
+    final double leftEyeX = leftEye.dx;
+    final double leftEyeY = leftEye.dy;
+    final double rightEyeX = rightEye.dx;
+    final double rightEyeY = rightEye.dy;
+    final double dynamicLeftX =
+        leftEyeX + (lookAtX * maxShiftX).clamp(-maxShiftX, maxShiftX);
+    final double dynamicLeftY =
+        leftEyeY + (lookAtY * maxShiftY).clamp(-maxShiftY, maxShiftY);
+    final double dynamicRightX =
+        rightEyeX + (lookAtX * maxShiftX).clamp(-maxShiftX, maxShiftX);
+    final double dynamicRightY =
+        rightEyeY + (lookAtY * maxShiftY).clamp(-maxShiftY, maxShiftY);
 
     final Paint eyeBasePaint = Paint()
       ..color = Colors.white
@@ -590,7 +605,7 @@ class _ViolettaFaceOverlayPainter extends CustomPainter {
       eyeBasePaint,
     );
     canvas.drawCircle(
-      leftEye + Offset(lookAtX * 3.0 * currentScale, lookAtY * 2.0 * currentScale),
+      Offset(dynamicLeftX, dynamicLeftY),
       pupilRadius,
       pupilPaint,
     );
@@ -604,7 +619,7 @@ class _ViolettaFaceOverlayPainter extends CustomPainter {
       eyeBasePaint,
     );
     canvas.drawCircle(
-      rightEye + Offset(lookAtX * 3.0 * currentScale, lookAtY * 2.0 * currentScale),
+      Offset(dynamicRightX, dynamicRightY),
       pupilRadius,
       pupilPaint,
     );
@@ -631,29 +646,53 @@ class _ViolettaFaceOverlayPainter extends CustomPainter {
       );
     }
 
-    final Paint mouthPaint = Paint()
-      ..color = Colors.black
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.5 * currentScale
-      ..strokeCap = StrokeCap.round;
-    final double mouthOpenHeight = 6.0 * currentScale * mouthVolume;
+    final double mouthOpenHeight = 5.5 * currentScale * mouthVolume;
+    final double halfMouthWidth = mouthWidth * 0.5;
 
     if (mouthVolume < 0.1) {
-      canvas.drawLine(
-        Offset(mouth.dx - mouthWidth / 2, mouth.dy),
-        Offset(mouth.dx + mouthWidth / 2, mouth.dy),
-        mouthPaint,
-      );
-    } else {
-      final Path mouthPath = Path()
-        ..moveTo(mouth.dx - mouthWidth / 2, mouth.dy)
+      final Paint closedMouthPaint = Paint()
+        ..color = Colors.black
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.0 * currentScale
+        ..strokeCap = StrokeCap.round;
+      final Path closedMouthPath = Path()
+        ..moveTo(mouth.dx - halfMouthWidth, mouth.dy)
         ..quadraticBezierTo(
           mouth.dx,
-          mouth.dy + mouthOpenHeight,
-          mouth.dx + mouthWidth / 2,
+          mouth.dy + 0.25 * currentScale,
+          mouth.dx + halfMouthWidth,
           mouth.dy,
         );
-      canvas.drawPath(mouthPath, mouthPaint);
+      canvas.drawPath(closedMouthPath, closedMouthPaint);
+    } else {
+      final Path mouthCavityPath = Path()
+        ..moveTo(mouth.dx - halfMouthWidth, mouth.dy)
+        ..quadraticBezierTo(
+          mouth.dx - halfMouthWidth * 0.35,
+          mouth.dy + mouthOpenHeight * 0.55,
+          mouth.dx,
+          mouth.dy + mouthOpenHeight,
+        )
+        ..quadraticBezierTo(
+          mouth.dx + halfMouthWidth * 0.35,
+          mouth.dy + mouthOpenHeight * 0.55,
+          mouth.dx + halfMouthWidth,
+          mouth.dy,
+        )
+        ..close();
+
+      final Paint mouthFillPaint = Paint()
+        ..color = const Color(0xFF4A2325)
+        ..style = PaintingStyle.fill;
+      final Paint mouthOutlinePaint = Paint()
+        ..color = Colors.black
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.0 * currentScale
+        ..strokeJoin = StrokeJoin.round
+        ..strokeCap = StrokeCap.round;
+
+      canvas.drawPath(mouthCavityPath, mouthFillPaint);
+      canvas.drawPath(mouthCavityPath, mouthOutlinePaint);
     }
 
     if (landmarksDetected) {
