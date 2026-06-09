@@ -566,9 +566,9 @@ class _ViolettaFaceOverlayPainter extends CustomPainter {
         drawBox.landmark(Violetta3DRenderEngine.rightEyeNorm);
     final Offset mouth = drawBox.landmark(Violetta3DRenderEngine.mouthNorm);
 
-    final double eyeRadiusX = 8.0 * currentScale;
-    final double eyeRadiusY = 5.5 * currentScale;
-    final double pupilRadius = 3.0 * currentScale;
+    final double eyeRadiusX = 5.2 * currentScale;
+    final double eyeRadiusY = 3.6 * currentScale;
+    final double pupilRadius = 2.0 * currentScale;
     final double mouthWidth = 12.0 * currentScale;
 
     final Paint eyeBasePaint = Paint()
