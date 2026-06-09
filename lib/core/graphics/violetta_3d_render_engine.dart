@@ -520,8 +520,6 @@ class _Violetta3DRenderEngineState extends State<Violetta3DRenderEngine>
                             lookAtY: lookAtY,
                             blinkProgress: blinkClosure,
                             mouthVolume: mouthVolume,
-                            landmarksDetected:
-                                Violetta3DRenderEngine.landmarksDetected,
                           ),
                         ),
                       ),
@@ -542,14 +540,12 @@ class _ViolettaFaceOverlayPainter extends CustomPainter {
   final double lookAtY;
   final double blinkProgress;
   final double mouthVolume;
-  final bool landmarksDetected;
 
   const _ViolettaFaceOverlayPainter({
     required this.lookAtX,
     required this.lookAtY,
     required this.blinkProgress,
     required this.mouthVolume,
-    required this.landmarksDetected,
   });
 
   @override
@@ -568,29 +564,25 @@ class _ViolettaFaceOverlayPainter extends CustomPainter {
 
     final double eyeRadiusX = 2.5 * currentScale;
     final double eyeRadiusY = 1.6 * currentScale;
-    final double pupilRadius = 2.2 * currentScale;
-    final double mouthWidth = 7.0 * currentScale;
+    final double pupilRadius = 1.2 * currentScale;
+    final double mouthWidth = 6.0 * currentScale;
 
     final double maxShiftX = 1.5 * currentScale;
     final double maxShiftY = 1.0 * currentScale;
-    final double leftEyeX = leftEye.dx;
-    final double leftEyeY = leftEye.dy;
-    final double rightEyeX = rightEye.dx;
-    final double rightEyeY = rightEye.dy;
     final double dynamicLeftX =
-        leftEyeX + (lookAtX * maxShiftX).clamp(-maxShiftX, maxShiftX);
+        leftEye.dx + (lookAtX * maxShiftX).clamp(-maxShiftX, maxShiftX);
     final double dynamicLeftY =
-        leftEyeY + (lookAtY * maxShiftY).clamp(-maxShiftY, maxShiftY);
+        leftEye.dy + (lookAtY * maxShiftY).clamp(-maxShiftY, maxShiftY);
     final double dynamicRightX =
-        rightEyeX + (lookAtX * maxShiftX).clamp(-maxShiftX, maxShiftX);
+        rightEye.dx + (lookAtX * maxShiftX).clamp(-maxShiftX, maxShiftX);
     final double dynamicRightY =
-        rightEyeY + (lookAtY * maxShiftY).clamp(-maxShiftY, maxShiftY);
+        rightEye.dy + (lookAtY * maxShiftY).clamp(-maxShiftY, maxShiftY);
 
-    final Paint eyeBasePaint = Paint()
+    final Paint scleraPaint = Paint()
       ..color = Colors.white
       ..style = PaintingStyle.fill;
     final Paint pupilPaint = Paint()
-      ..color = const Color(0xFF3D2A1C)
+      ..color = const Color(0xFF1A1A1A)
       ..style = PaintingStyle.fill;
     final Paint skinPaint = Paint()
       ..color = const Color(0xFFC89472)
@@ -602,21 +594,21 @@ class _ViolettaFaceOverlayPainter extends CustomPainter {
         width: eyeRadiusX * 2,
         height: eyeRadiusY * 2,
       ),
-      eyeBasePaint,
+      scleraPaint,
     );
-    canvas.drawCircle(
-      Offset(dynamicLeftX, dynamicLeftY),
-      pupilRadius,
-      pupilPaint,
-    );
-
     canvas.drawOval(
       Rect.fromCenter(
         center: rightEye,
         width: eyeRadiusX * 2,
         height: eyeRadiusY * 2,
       ),
-      eyeBasePaint,
+      scleraPaint,
+    );
+
+    canvas.drawCircle(
+      Offset(dynamicLeftX, dynamicLeftY),
+      pupilRadius,
+      pupilPaint,
     );
     canvas.drawCircle(
       Offset(dynamicRightX, dynamicRightY),
@@ -653,13 +645,13 @@ class _ViolettaFaceOverlayPainter extends CustomPainter {
       final Paint closedMouthPaint = Paint()
         ..color = Colors.black
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.0 * currentScale
+        ..strokeWidth = 1.5 * currentScale
         ..strokeCap = StrokeCap.round;
       final Path closedMouthPath = Path()
         ..moveTo(mouth.dx - halfMouthWidth, mouth.dy)
         ..quadraticBezierTo(
           mouth.dx,
-          mouth.dy + 0.25 * currentScale,
+          mouth.dy + 0.2 * currentScale,
           mouth.dx + halfMouthWidth,
           mouth.dy,
         );
@@ -694,15 +686,6 @@ class _ViolettaFaceOverlayPainter extends CustomPainter {
       canvas.drawPath(mouthCavityPath, mouthFillPaint);
       canvas.drawPath(mouthCavityPath, mouthOutlinePaint);
     }
-
-    if (landmarksDetected) {
-      final Paint debugPaint = Paint()
-        ..color = Colors.white
-        ..style = PaintingStyle.fill;
-      canvas.drawCircle(leftEye, 1.5, debugPaint);
-      canvas.drawCircle(rightEye, 1.5, debugPaint);
-      canvas.drawCircle(mouth, 1.5, debugPaint);
-    }
   }
 
   @override
@@ -710,7 +693,6 @@ class _ViolettaFaceOverlayPainter extends CustomPainter {
     return oldDelegate.lookAtX != lookAtX ||
         oldDelegate.lookAtY != lookAtY ||
         oldDelegate.blinkProgress != blinkProgress ||
-        oldDelegate.mouthVolume != mouthVolume ||
-        oldDelegate.landmarksDetected != landmarksDetected;
+        oldDelegate.mouthVolume != mouthVolume;
   }
 }
