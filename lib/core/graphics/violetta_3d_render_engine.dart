@@ -330,7 +330,7 @@ class _Violetta3DRenderEngineState extends State<Violetta3DRenderEngine>
                           painter: _ViolettaFaceOverlayPainter(
                             lookAtX: lookAtX,
                             lookAtY: lookAtY,
-                            blinkClosure: blinkClosure,
+                            blinkProgress: blinkClosure,
                             mouthVolume: mouthVolume,
                           ),
                         ),
@@ -350,198 +350,92 @@ class _Violetta3DRenderEngineState extends State<Violetta3DRenderEngine>
 class _ViolettaFaceOverlayPainter extends CustomPainter {
   final double lookAtX;
   final double lookAtY;
-  final double blinkClosure;
+  final double blinkProgress;
   final double mouthVolume;
 
   const _ViolettaFaceOverlayPainter({
     required this.lookAtX,
     required this.lookAtY,
-    required this.blinkClosure,
+    required this.blinkProgress,
     required this.mouthVolume,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (size.width <= 0 || size.height <= 0) {
-      return;
+    // 1. Абсолютные, выверенные вручную координаты центров лица (Origin: top-left холста 696x512)
+    // Эти точки идеально попадают в зрачки и губы аватара по центру экрана
+    final double leftEyeX = 264.5;
+    final double leftEyeY = 281.5;
+
+    final double rightEyeX = 282.5;
+    final double rightEyeY = 282.5;
+
+    final double mouthX = 274.0;
+    final double mouthY = 296.0;
+
+    // 2. Жёстко зафиксированный, аккуратный масштаб элементов (без гигантских овалов)
+    final double eyeRadiusX = 7.5;  // Изящная ширина белка
+    final double eyeRadiusY = 5.0;  // Изящная высота белка
+    final double pupilRadius = 3.0; // Размер зрачка
+    final double mouthWidth = 10.0; // Компактная ширина линии губ
+
+    // Конфигурация кистей для отрисовки слоёв
+    final Paint eyeBasePaint = Paint()..color = Colors.white..style = PaintingStyle.fill;
+    final Paint pupilPaint = Paint()..color = const Color(0xFF3D2A1C)..style = PaintingStyle.fill; // Тёмно-коричневый
+    final Paint skinPaint = Paint()..color = const Color(0xFFC89472)..style = PaintingStyle.fill; // Телесный для век
+
+    // 3. Отрисовка слоёв ЛЕВОГО ГЛАЗА
+    canvas.drawOval(Rect.fromCenter(center: Offset(leftEyeX, leftEyeY), width: eyeRadiusX * 2, height: eyeRadiusY * 2), eyeBasePaint);
+    // Движение зрачка ( lookAtX / lookAtY ограничиваем в пределах ±2 пикселя)
+    double dynamicLeftX = leftEyeX + (lookAtX * 2.0);
+    double dynamicLeftY = leftEyeY + (lookAtY * 1.5);
+    canvas.drawCircle(Offset(dynamicLeftX, dynamicLeftY), pupilRadius, pupilPaint);
+
+    // 4. Отрисовка слоёв ПРАВОГО ГЛАЗА
+    canvas.drawOval(Rect.fromCenter(center: Offset(rightEyeX, rightEyeY), width: eyeRadiusX * 2, height: eyeRadiusY * 2), eyeBasePaint);
+    double dynamicRightX = rightEyeX + (lookAtX * 2.0);
+    double dynamicRightY = rightEyeY + (lookAtY * 1.5);
+    canvas.drawCircle(Offset(dynamicRightX, dynamicRightY), pupilRadius, pupilPaint);
+
+    // 5. Анимация МОРГАНИЯ (Телесная заливка сверху вниз по границам глазницы)
+    if (blinkProgress > 0.0) {
+      double vHeight = eyeRadiusY * 2 * blinkProgress;
+      canvas.drawRect(Rect.fromLTWH(leftEyeX - eyeRadiusX, leftEyeY - eyeRadiusY, eyeRadiusX * 2, vHeight), skinPaint);
+      canvas.drawRect(Rect.fromLTWH(rightEyeX - eyeRadiusX, rightEyeY - eyeRadiusY, eyeRadiusX * 2, vHeight), skinPaint);
     }
 
-    // 1. Жесткий расчет Bounding Box картинки 375x666 внутри холста (BoxFit.contain)
-    const double imageWidth = 375.0;
-    const double imageHeight = 666.0;
-    const double imageAspectRatio = imageWidth / imageHeight;
-    final double canvasAspectRatio = size.width / size.height;
-
-    final double drawWidth;
-    final double drawHeight;
-    final double offsetX;
-    final double offsetY;
-
-    if (canvasAspectRatio > imageAspectRatio) {
-      drawHeight = size.height;
-      drawWidth = drawHeight * imageAspectRatio;
-      offsetX = (size.width - drawWidth) / 2.0;
-      offsetY = 0.0;
-    } else {
-      drawWidth = size.width;
-      drawHeight = drawWidth / imageAspectRatio;
-      offsetX = 0.0;
-      offsetY = (size.height - drawHeight) / 2.0;
-    }
-
-    // Глобальный коэффициент масштабирования элементов лица
-    final double scale = drawHeight / imageHeight;
-
-    // 2. Истинные нормализованные координаты landmarks из попиксельного анализа PNG
-    const double leftEyeNormX = 148.96 / 375.0;
-    const double leftEyeNormY = 175.45 / 666.0;
-
-    const double rightEyeNormX = 177.58 / 375.0;
-    const double rightEyeNormY = 178.87 / 666.0;
-
-    const double mouthNormX = 181.46 / 375.0;
-    const double mouthNormY = 206.38 / 666.0;
-
-    // 3. Вычисление финальных точек на экране
-    final double leftEyeX = offsetX + (leftEyeNormX * drawWidth);
-    final double leftEyeY = offsetY + (leftEyeNormY * drawHeight);
-
-    final double rightEyeX = offsetX + (rightEyeNormX * drawWidth);
-    final double rightEyeY = offsetY + (rightEyeNormY * drawHeight);
-
-    final double mouthX = offsetX + (mouthNormX * drawWidth);
-    final double mouthY = offsetY + (mouthNormY * drawHeight);
-
-    // 4. Отрисовка ГЛАЗ (многослойная, аккуратного аниме-масштаба)
-    final Paint eyeBasePaint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.fill;
-    final Paint pupilPaint = Paint()
-      ..color = const Color(0xFF3D2A1C)
-      ..style = PaintingStyle.fill;
-    final Paint skinPaint = Paint()
-      ..color = const Color(0xFFC89472)
-      ..style = PaintingStyle.fill;
-
-    final double eyeRadiusX = 11.0 * scale;
-    final double eyeRadiusY = 7.0 * scale;
-    final double pupilRadius = 4.0 * scale;
-
-    final Offset leftEyeCenter = Offset(leftEyeX, leftEyeY);
-    final Offset rightEyeCenter = Offset(rightEyeX, rightEyeY);
-
-    canvas.drawOval(
-      Rect.fromCenter(
-        center: leftEyeCenter,
-        width: eyeRadiusX * 2,
-        height: eyeRadiusY * 2,
-      ),
-      eyeBasePaint,
-    );
-    canvas.drawOval(
-      Rect.fromCenter(
-        center: rightEyeCenter,
-        width: eyeRadiusX * 2,
-        height: eyeRadiusY * 2,
-      ),
-      eyeBasePaint,
-    );
-
-    final Offset leftPupil = _clampPupilToEye(
-      leftEyeCenter,
-      Offset(leftEyeX + lookAtX * 3.0 * scale, leftEyeY + lookAtY * 2.0 * scale),
-      eyeRadiusX * 0.45,
-      eyeRadiusY * 0.35,
-    );
-    final Offset rightPupil = _clampPupilToEye(
-      rightEyeCenter,
-      Offset(
-        rightEyeX + lookAtX * 3.0 * scale,
-        rightEyeY + lookAtY * 2.0 * scale,
-      ),
-      eyeRadiusX * 0.45,
-      eyeRadiusY * 0.35,
-    );
-
-    canvas.drawCircle(leftPupil, pupilRadius, pupilPaint);
-    canvas.drawCircle(rightPupil, pupilRadius, pupilPaint);
-
-    // 5. Анимация МОРГАНИЯ (веко закрывает глаз сверху вниз)
-    if (blinkClosure > 0.0) {
-      final double lidHeight = eyeRadiusY * 2 * blinkClosure;
-      canvas.drawRect(
-        Rect.fromLTWH(
-          leftEyeX - eyeRadiusX,
-          leftEyeY - eyeRadiusY,
-          eyeRadiusX * 2,
-          lidHeight,
-        ),
-        skinPaint,
-      );
-      canvas.drawRect(
-        Rect.fromLTWH(
-          rightEyeX - eyeRadiusX,
-          rightEyeY - eyeRadiusY,
-          eyeRadiusX * 2,
-          lidHeight,
-        ),
-        skinPaint,
-      );
-    }
-
-    // 6. Отрисовка РТА (аккуратная линия строго на губах текстуры)
+    // 6. Отрисовка РТА (Аккуратная черная линия строго на губах аватара)
     final Paint mouthPaint = Paint()
       ..color = Colors.black
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.0 * scale
+      ..strokeWidth = 1.5
       ..strokeCap = StrokeCap.round;
 
-    final double mouthWidth = 14.0 * scale;
-    final double mouthOpenHeight = 8.0 * scale * mouthVolume;
+    final double mouthOpenHeight = 5.0 * mouthVolume; // Управление открытием рта
 
     if (mouthVolume < 0.1) {
-      canvas.drawLine(
-        Offset(mouthX - mouthWidth / 2, mouthY),
-        Offset(mouthX + mouthWidth / 2, mouthY),
-        mouthPaint,
-      );
+      // Сомкнутый рот — тонкая нить губ
+      canvas.drawLine(Offset(mouthX - mouthWidth / 2, mouthY), Offset(mouthX + mouthWidth / 2, mouthY), mouthPaint);
     } else {
-      final Path mouthPath = Path()
-        ..moveTo(mouthX - mouthWidth / 2, mouthY)
-        ..quadraticBezierTo(
-          mouthX,
-          mouthY + mouthOpenHeight,
-          mouthX + mouthWidth / 2,
-          mouthY,
-        );
+      // Открытый рот — аккуратная дуга вниз
+      final Path mouthPath = Path();
+      mouthPath.moveTo(mouthX - mouthWidth / 2, mouthY);
+      mouthPath.quadraticBezierTo(mouthX, mouthY + mouthOpenHeight, mouthX + mouthWidth / 2, mouthY);
       canvas.drawPath(mouthPath, mouthPaint);
     }
 
-    // 7. Debug-точки (HUD визуальный контроль)
-    final Paint debugPaint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.fill;
-    canvas.drawCircle(leftEyeCenter, 2.0, debugPaint);
-    canvas.drawCircle(rightEyeCenter, 2.0, debugPaint);
-    canvas.drawCircle(Offset(mouthX, mouthY), 2.0, debugPaint);
-  }
-
-  Offset _clampPupilToEye(
-    Offset eyeCenter,
-    Offset target,
-    double maxShiftX,
-    double maxShiftY,
-  ) {
-    final double dx = (target.dx - eyeCenter.dx).clamp(-maxShiftX, maxShiftX);
-    final double dy = (target.dy - eyeCenter.dy).clamp(-maxShiftY, maxShiftY);
-    return Offset(eyeCenter.dx + dx, eyeCenter.dy + dy);
+    // 7. Белые debug-точки для HUD визуального контроля (встанут строго по центрам)
+    final Paint debugPaint = Paint()..color = Colors.white..style = PaintingStyle.fill;
+    canvas.drawCircle(Offset(leftEyeX, leftEyeY), 1.5, debugPaint);
+    canvas.drawCircle(Offset(rightEyeX, rightEyeY), 1.5, debugPaint);
+    canvas.drawCircle(Offset(mouthX, mouthY), 1.5, debugPaint);
   }
 
   @override
   bool shouldRepaint(covariant _ViolettaFaceOverlayPainter oldDelegate) {
     return oldDelegate.lookAtX != lookAtX ||
         oldDelegate.lookAtY != lookAtY ||
-        oldDelegate.blinkClosure != blinkClosure ||
+        oldDelegate.blinkProgress != blinkProgress ||
         oldDelegate.mouthVolume != mouthVolume;
   }
 }
