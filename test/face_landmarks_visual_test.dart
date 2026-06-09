@@ -20,9 +20,9 @@ void main() {
       imageRect.top + Violetta3DRenderEngine.mouthNorm.dy * imageRect.height,
     );
 
-    const Offset hardcodedLeftEye = Offset(264.5, 281.5);
-    const Offset hardcodedRightEye = Offset(282.5, 282.5);
-    const Offset hardcodedMouth = Offset(274.0, 296.0);
+    const Offset hardcodedLeftEye = Offset(221.1, 131.7);
+    const Offset hardcodedRightEye = Offset(242.6, 134.3);
+    const Offset hardcodedMouth = Offset(245.5, 155.0);
 
     final Offset leftDelta = hardcodedLeftEye - expectedLeftEye;
     final Offset rightDelta = hardcodedRightEye - expectedRightEye;
