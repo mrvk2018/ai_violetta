@@ -324,12 +324,15 @@ class _Violetta3DRenderEngineState extends State<Violetta3DRenderEngine>
                           },
                         ),
                       ),
-                      CustomPaint(
-                        painter: _ViolettaFaceOverlayPainter(
-                          lookAtX: lookAtX,
-                          lookAtY: lookAtY,
-                          blinkClosure: blinkClosure,
-                          mouthVolume: mouthVolume,
+                      Positioned.fill(
+                        child: CustomPaint(
+                          size: Violetta3DRenderEngine.canvasSize,
+                          painter: _ViolettaFaceOverlayPainter(
+                            lookAtX: lookAtX,
+                            lookAtY: lookAtY,
+                            blinkClosure: blinkClosure,
+                            mouthVolume: mouthVolume,
+                          ),
                         ),
                       ),
                     ],
@@ -370,6 +373,10 @@ class _ViolettaFaceOverlayPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    if (size.width <= 0 || size.height <= 0) {
+      return;
+    }
+
     final _SpriteDrawBox drawBox = _SpriteDrawBox.fromCanvasSize(size);
     final double currentScale = drawBox.currentScale;
 
