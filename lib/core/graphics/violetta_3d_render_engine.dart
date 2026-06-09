@@ -564,11 +564,11 @@ class _ViolettaFaceOverlayPainter extends CustomPainter {
 
     final double eyeRadiusX = 2.5 * currentScale;
     final double eyeRadiusY = 1.6 * currentScale;
-    final double pupilRadius = 1.2 * currentScale;
-    final double mouthWidth = 6.0 * currentScale;
+    final double pupilRadius = 2.6 * currentScale;
+    final double mouthWidth = 7.0 * currentScale;
 
-    final double maxShiftX = 1.5 * currentScale;
-    final double maxShiftY = 1.0 * currentScale;
+    final double maxShiftX = 1.0 * currentScale;
+    final double maxShiftY = 0.6 * currentScale;
     final double dynamicLeftX =
         leftEye.dx + (lookAtX * maxShiftX).clamp(-maxShiftX, maxShiftX);
     final double dynamicLeftY =
@@ -637,6 +637,20 @@ class _ViolettaFaceOverlayPainter extends CustomPainter {
         skinPaint,
       );
     }
+
+    final double mouthX = mouth.dx;
+    final double mouthY = mouth.dy;
+    final Paint mouthMaskPaint = Paint()
+      ..color = const Color(0xFFEAD5C3)
+      ..style = PaintingStyle.fill;
+    canvas.drawOval(
+      Rect.fromCenter(
+        center: Offset(mouthX, mouthY),
+        width: 26.0 * currentScale,
+        height: 12.0 * currentScale,
+      ),
+      mouthMaskPaint,
+    );
 
     final double mouthOpenHeight = 5.5 * currentScale * mouthVolume;
     final double halfMouthWidth = mouthWidth * 0.5;
